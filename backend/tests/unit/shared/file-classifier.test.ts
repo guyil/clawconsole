@@ -76,6 +76,25 @@ describe('classifyFile', () => {
     expect(classifyFile('canvas/index.html')).toBe('system_internal');
   });
 
+  it('classifies workflow definition YAML as console_managed', () => {
+    expect(classifyFile('workflows/content-pipeline.yaml')).toBe('console_managed');
+    expect(classifyFile('workflows/ticket-handler.yaml')).toBe('console_managed');
+  });
+
+  it('classifies workflow review response as console_managed', () => {
+    expect(classifyFile('workflow-reviews/run-123/review-node.response.json')).toBe('console_managed');
+  });
+
+  it('classifies workflow run status as runtime_observable', () => {
+    expect(classifyFile('workflow-runs/run-123/status.json')).toBe('runtime_observable');
+    expect(classifyFile('workflow-runs/run-123/nodes/draft.output.json')).toBe('runtime_observable');
+    expect(classifyFile('workflow-runs/run-123/logs/execution.log')).toBe('runtime_observable');
+  });
+
+  it('classifies workflow review request as runtime_observable', () => {
+    expect(classifyFile('workflow-reviews/run-123/review-node.request.json')).toBe('runtime_observable');
+  });
+
   it('classifies unknown files as system_internal (safe default)', () => {
     expect(classifyFile('some-random-file.txt')).toBe('system_internal');
   });
@@ -116,6 +135,12 @@ describe('detectFileType', () => {
   it('detects memory type', () => {
     expect(detectFileType('workspace-pm/memory/2026-03-05.md')).toBe('memory');
     expect(detectFileType('memory/pm.sqlite')).toBe('memory');
+  });
+
+  it('detects workflow type', () => {
+    expect(detectFileType('workflows/content-pipeline.yaml')).toBe('workflow');
+    expect(detectFileType('workflow-runs/run-123/status.json')).toBe('workflow');
+    expect(detectFileType('workflow-reviews/run-123/review.request.json')).toBe('workflow');
   });
 });
 

@@ -37,6 +37,10 @@ import { PlaygroundRepository } from './modules/playground/playground.repository
 import { PlaygroundService } from './modules/playground/playground.service.js';
 import { registerPlaygroundRoutes } from './modules/playground/playground.routes.js';
 
+import { WorkflowRepository } from './modules/workflows/workflow.repository.js';
+import { WorkflowService } from './modules/workflows/workflow.service.js';
+import { registerWorkflowRoutes } from './modules/workflows/workflow.routes.js';
+
 import { BotConfigAgentService } from './modules/bot-config-agent/bot-config-agent.service.js';
 import { registerBotConfigAgentRoutes } from './modules/bot-config-agent/bot-config-agent.routes.js';
 
@@ -106,6 +110,10 @@ async function main() {
   const machineService = new MachineService(machineRepo, sshPool, sshExecutor, tailscale, agentRepo, skillRepo);
   const credentialService = new CredentialService(credentialRepo, fileTransfer, machineService);
   const skillService = new SkillService(skillRepo, fileTransfer, machineService, agentRepo);
+
+  // --- Workflows ---
+  const workflowRepo = new WorkflowRepository();
+  const workflowService = new WorkflowService(workflowRepo, skillRepo);
 
   // --- Monitoring ---
   const gatewayPool = new GatewayConnectorPool();
@@ -177,6 +185,7 @@ async function main() {
   registerPlaygroundRoutes(fastify, playgroundService);
   registerBotConfigAgentRoutes(fastify, botConfigAgentService);
   registerAssistantRoutes(fastify, assistantService);
+  registerWorkflowRoutes(fastify, workflowService);
 
   // --- Agent Routes ---
   fastify.get('/api/agents', async () => {
