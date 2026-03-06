@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAllAgents } from '../hooks/useAgents';
 import { StatusDot } from '../components/ui/StatusDot';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PageSpinner } from '../components/ui/Spinner';
-import { Bot, Server, Puzzle } from 'lucide-react';
+import { CreateBotWizard } from '../components/bots/CreateBotWizard';
+import { Bot, Server, Puzzle, Plus } from 'lucide-react';
 import type { AgentWithMachine } from '../types/agent';
 
 const statusLabels: Record<string, string> = {
@@ -64,6 +67,7 @@ function BotCard({ agent, onClick }: { agent: AgentWithMachine; onClick: () => v
 export function BotsPage() {
   const { data, isLoading } = useAllAgents();
   const navigate = useNavigate();
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   if (isLoading) return <PageSpinner />;
 
@@ -84,13 +88,23 @@ export function BotsPage() {
         <div className="text-[13px] text-claw-muted">
           共 {agents.length} 个 Bot
         </div>
+        <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
+          新建 Bot
+        </Button>
       </div>
+
+      <CreateBotWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
 
       {agents.length === 0 ? (
         <EmptyState
           icon={<Bot size={48} />}
           title="暂无 Bot"
           description="请先在节点管理中注册节点并扫描 Agent"
+          action={
+            <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
+              新建 Bot
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-6">
