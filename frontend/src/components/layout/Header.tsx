@@ -7,6 +7,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/machines': '节点管理',
   '/skills': 'Skills 中心',
   '/credentials': '凭证管理',
+  '/assistant': 'AI 助手',
   '/settings': '系统设置',
 };
 

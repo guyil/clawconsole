@@ -10,11 +10,13 @@ import { SkillsPage } from './pages/SkillsPage';
 import { SkillDetailPage } from './pages/SkillDetailPage';
 import { CredentialsPage } from './pages/CredentialsPage';
 import { PlaygroundPage } from './pages/PlaygroundPage';
+import { AssistantPage } from './pages/AssistantPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { MonitoringDashboardPage } from './pages/MonitoringDashboardPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { LogsPage } from './pages/LogsPage';
 import { useWebSocketStore } from './stores/websocket.store';
+import { useWebSocketQuerySync } from './hooks/useWebSocketQuerySync';
 
 export default function App() {
   const connect = useWebSocketStore((s) => s.connect);
@@ -22,6 +24,8 @@ export default function App() {
   useEffect(() => {
     connect();
   }, [connect]);
+
+  useWebSocketQuerySync();
 
   return (
     <Routes>
@@ -34,6 +38,7 @@ export default function App() {
         <Route path="skills" element={<SkillsPage />} />
         <Route path="skills/:skillId" element={<SkillDetailPage />} />
         <Route path="playground" element={<PlaygroundPage />} />
+        <Route path="assistant" element={<AssistantPage />} />
         <Route path="credentials" element={<CredentialsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="monitoring" element={<MonitoringDashboardPage />} />

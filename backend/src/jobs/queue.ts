@@ -14,14 +14,17 @@ const connection = {
 export const healthCheckQueue = new Queue('health-check', { connection });
 export const autoPullQueue = new Queue('auto-pull', { connection });
 export const syncRetryQueue = new Queue('sync-retry', { connection });
+export const sessionSyncQueue = new Queue('session-sync', { connection });
+export const logCollectorQueue = new Queue('log-collector', { connection });
 
 export function createWorker<T>(
   queueName: string,
   handler: (job: Job<T>) => Promise<void>,
+  options?: { concurrency?: number },
 ): Worker<T> {
   const worker = new Worker<T>(queueName, handler, {
     connection,
-    concurrency: 3,
+    concurrency: options?.concurrency ?? 3,
   });
 
   worker.on('completed', (job) => {
@@ -61,6 +64,26 @@ export async function setupRecurringJobs(): Promise<void> {
     {},
     {
       repeat: { every: config.jobs.syncRetryIntervalS * 1000 },
+      removeOnComplete: { count: 100 },
+      removeOnFail: { count: 50 },
+    },
+  );
+
+  await sessionSyncQueue.add(
+    'sync-all-sessions',
+    {},
+    {
+      repeat: { every: config.jobs.sessionSyncIntervalS * 1000 },
+      removeOnComplete: { count: 100 },
+      removeOnFail: { count: 50 },
+    },
+  );
+
+  await logCollectorQueue.add(
+    'collect-all-logs',
+    {},
+    {
+      repeat: { every: config.jobs.logCollectorIntervalS * 1000 },
       removeOnComplete: { count: 100 },
       removeOnFail: { count: 50 },
     },

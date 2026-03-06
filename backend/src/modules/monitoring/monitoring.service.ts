@@ -120,13 +120,13 @@ export class MonitoringService {
     if (pulled === 0) {
       // Fall back to SSH transcript pull
       const snapshot = await this.repo.findSessionSnapshotByKey(machineId, sessionKey);
-      if (snapshot?.sessionId) {
-        const machine = await this.machineService.getMachine(machineId);
-        const connInfo = this.machineService.toConnectionInfo(machine);
-        pulled = await this.sessionMonitor.pullTranscriptViaSSH(
-          machineId, connInfo, machine.openclawHome, agentId, snapshot.sessionId,
-        );
-      }
+      // Use sessionId from snapshot, or fall back to sessionKey for legacy formats
+      const sessionId = snapshot?.sessionId ?? sessionKey;
+      const machine = await this.machineService.getMachine(machineId);
+      const connInfo = this.machineService.toConnectionInfo(machine);
+      pulled = await this.sessionMonitor.pullTranscriptViaSSH(
+        machineId, connInfo, machine.openclawHome, agentId, sessionId,
+      );
     }
     return { pulled };
   }

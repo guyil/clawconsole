@@ -28,12 +28,11 @@ export class LogCollectorService {
       ? openclawHome.replace('~', '$HOME')
       : openclawHome;
 
-    const [gateway, command, configAudit, cronRun] = await Promise.all([
-      this.collectGatewayLogs(machineId, connInfo, home),
-      this.collectCommandLogs(machineId, connInfo, home),
-      this.collectConfigAuditLogs(machineId, connInfo, home),
-      this.collectCronRunLogs(machineId, connInfo, home),
-    ]);
+    // Sequential to avoid saturating the SSH connection pool
+    const gateway = await this.collectGatewayLogs(machineId, connInfo, home);
+    const command = await this.collectCommandLogs(machineId, connInfo, home);
+    const configAudit = await this.collectConfigAuditLogs(machineId, connInfo, home);
+    const cronRun = await this.collectCronRunLogs(machineId, connInfo, home);
 
     log.info(
       { machineId, gateway, command, configAudit, cronRun },

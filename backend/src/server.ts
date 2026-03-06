@@ -40,6 +40,10 @@ import { registerPlaygroundRoutes } from './modules/playground/playground.routes
 import { BotConfigAgentService } from './modules/bot-config-agent/bot-config-agent.service.js';
 import { registerBotConfigAgentRoutes } from './modules/bot-config-agent/bot-config-agent.routes.js';
 
+import { AssistantRepository } from './modules/assistant/assistant.repository.js';
+import { AssistantService } from './modules/assistant/assistant.service.js';
+import { registerAssistantRoutes } from './modules/assistant/assistant.routes.js';
+
 import { MonitoringRepository } from './modules/monitoring/monitoring.repository.js';
 import { MonitoringService } from './modules/monitoring/monitoring.service.js';
 import { SessionMonitorService } from './modules/monitoring/session-monitor.service.js';
@@ -52,6 +56,13 @@ import {
   emitSessionUpdated,
   emitDiagnosticEventToClient,
 } from './websocket/sync-events.js';
+
+import { setupRecurringJobs, createWorker } from './jobs/queue.js';
+import { createHealthCheckHandler } from './jobs/health-check.job.js';
+import { createAutoPullHandler } from './jobs/auto-pull.job.js';
+import { createSyncRetryHandler } from './jobs/sync-retry.job.js';
+import { createSessionSyncHandler } from './jobs/session-sync.job.js';
+import { createLogCollectorHandler } from './jobs/log-collector.job.js';
 
 const log = createChildLogger('server');
 
@@ -147,14 +158,25 @@ async function main() {
     fileTransfer,
   });
 
+  // --- AI Assistant ---
+  const assistantRepo = new AssistantRepository();
+  const assistantService = new AssistantService(assistantRepo, {
+    machineService,
+    machineRepo,
+    agentRepo,
+    syncRepo,
+    sshPool,
+  });
+
   // --- Routes ---
-  registerMachineRoutes(fastify, machineService);
+  registerMachineRoutes(fastify, machineService, gatewayPool);
   registerSyncRoutes(fastify, syncEngine, syncRepo, machineService);
   registerCredentialRoutes(fastify, credentialService);
   registerSkillRoutes(fastify, skillService);
   registerMonitoringRoutes(fastify, monitoringService);
   registerPlaygroundRoutes(fastify, playgroundService);
   registerBotConfigAgentRoutes(fastify, botConfigAgentService);
+  registerAssistantRoutes(fastify, assistantService);
 
   // --- Agent Routes ---
   fastify.get('/api/agents', async () => {
@@ -182,39 +204,67 @@ async function main() {
 
   fastify.get('/api/agents/:agentId/config-files', async (request) => {
     const { agentId } = request.params as { agentId: string };
+    const query = request.query as Record<string, string>;
     const agent = await agentRepo.findById(agentId);
     if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
 
     const machine = await machineRepo.findById(agent.machineId);
     if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
 
-    const connInfo = machineService.toConnectionInfo(machine);
     const workspace = agent.workspacePath ?? 'workspace';
 
-    // Resolve ~ to absolute path and list .md files
-    const { stdout } = await sshPool.executeCommand(
-      connInfo,
-      `cd ${machine.openclawHome}/${workspace} && pwd && ls -1 *.md 2>/dev/null`,
-      { timeoutMs: 10_000 },
-    );
-    const lines = stdout.split('\n').filter(Boolean);
-    if (lines.length === 0) return { data: [] };
+    // Read from local DB cache (populated by pull sync / discovery)
+    const cachedFiles = await fileRepo.findConfigFilesByWorkspace(machine.id, workspace);
 
-    // First line is the resolved absolute path
-    const absBasePath = lines[0];
-    const filenames = lines.slice(1);
-
-    const results: Array<{ filename: string; content: string }> = [];
-    for (const filename of filenames) {
-      try {
-        const content = await fileTransfer.downloadFile(connInfo, `${absBasePath}/${filename}`);
-        results.push({ filename, content });
-      } catch {
-        log.warn({ agentId, filename }, 'Failed to download config file');
-      }
+    // If DB has data and no explicit refresh requested, return cached data
+    if (cachedFiles.length > 0 && query.refresh !== 'true') {
+      const oldestUpdate = cachedFiles.reduce(
+        (min, f) => (f.updatedAt < min ? f.updatedAt : min),
+        cachedFiles[0].updatedAt,
+      );
+      return {
+        data: cachedFiles.map(({ filename, content }) => ({ filename, content })),
+        lastSyncedAt: oldestUpdate.toISOString(),
+      };
     }
 
-    return { data: results };
+    // Fallback to SSH: first sync or explicit refresh
+    try {
+      const connInfo = machineService.toConnectionInfo(machine);
+      const { stdout } = await sshPool.executeCommand(
+        connInfo,
+        `cd ${machine.openclawHome}/${workspace} && pwd && ls -1 *.md 2>/dev/null`,
+        { timeoutMs: 10_000 },
+      );
+      const lines = stdout.split('\n').filter(Boolean);
+      if (lines.length === 0) return { data: [], lastSyncedAt: null };
+
+      const absBasePath = lines[0];
+      const filenames = lines.slice(1);
+
+      const results: Array<{ filename: string; content: string }> = [];
+      for (const filename of filenames) {
+        try {
+          const content = await fileTransfer.downloadFile(connInfo, `${absBasePath}/${filename}`);
+          results.push({ filename, content });
+        } catch {
+          log.warn({ agentId, filename }, 'Failed to download config file');
+        }
+      }
+
+      return { data: results, lastSyncedAt: new Date().toISOString() };
+    } catch (err) {
+      // If SSH fails but we have cached data, return stale cache
+      if (cachedFiles.length > 0) {
+        log.warn({ agentId, err }, 'SSH refresh failed, returning cached config files');
+        return {
+          data: cachedFiles.map(({ filename, content }) => ({ filename, content })),
+          lastSyncedAt: cachedFiles[0].updatedAt.toISOString(),
+          stale: true,
+        };
+      }
+      throw err;
+    }
   });
 
   // --- File Routes (basic) ---
@@ -246,6 +296,14 @@ async function main() {
     await fileRepo.updateContent(fileId, content);
     return fileRepo.findById(fileId);
   });
+
+  // --- BullMQ Workers ---
+  // SSH-heavy jobs use concurrency 1 to avoid saturating the per-machine connection pool
+  createWorker('health-check', createHealthCheckHandler(machineService, gatewayPool), { concurrency: 1 });
+  createWorker('auto-pull', createAutoPullHandler(machineService, syncEngine), { concurrency: 1 });
+  createWorker('sync-retry', createSyncRetryHandler(machineService, syncEngine, syncRepo), { concurrency: 1 });
+  createWorker('session-sync', createSessionSyncHandler(monitoringService), { concurrency: 1 });
+  createWorker('log-collector', createLogCollectorHandler(monitoringService), { concurrency: 1 });
 
   // --- Health endpoint ---
   fastify.get('/api/health', async () => {
@@ -295,6 +353,23 @@ async function main() {
 
     await fastify.listen({ port: config.server.port, host: config.server.host });
     log.info(`Server running at http://${config.server.host}:${config.server.port}`);
+
+    // Start recurring background jobs
+    await setupRecurringJobs();
+    log.info('Background jobs started');
+
+    // Auto-connect gateway WebSocket for all online machines
+    const onlineMachines = await machineService.listMachines({ status: 'online' });
+    for (const machine of onlineMachines) {
+      gatewayPool.addMachine({
+        machineId: machine.id,
+        host: machine.tailscaleHostname,
+        port: config.gateway.defaultPort,
+      });
+    }
+    if (onlineMachines.length > 0) {
+      log.info({ count: onlineMachines.length }, 'Gateway connections initiated for online machines');
+    }
   } catch (err) {
     log.error({ err }, 'Failed to start server');
     process.exit(1);

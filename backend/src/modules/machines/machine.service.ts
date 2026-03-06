@@ -68,9 +68,9 @@ export class MachineService {
 
     if (tailscalePing.reachable) {
       try {
-        await this.sshPool.getConnection(connInfo);
+        const client = await this.sshPool.getConnection(connInfo);
         sshConnectivity = true;
-        this.sshPool.releaseConnection(machine.id, (await this.sshPool.getConnection(connInfo)));
+        this.sshPool.releaseConnection(machine.id, client);
       } catch {
         sshConnectivity = false;
       }

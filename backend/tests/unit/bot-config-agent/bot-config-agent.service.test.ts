@@ -17,6 +17,7 @@ function createMockDeps(): BotConfigAgentDeps {
     fileRepo: {
       findByPath: vi.fn().mockResolvedValue(null),
       upsertFile: vi.fn().mockResolvedValue('file-id-1'),
+      findConfigFilesByWorkspace: vi.fn().mockResolvedValue([]),
     } as any,
     machineService: {
       getMachine: vi.fn().mockResolvedValue({
@@ -66,7 +67,12 @@ describe('BotConfigAgentService', () => {
   });
 
   describe('getOrCreateSession', () => {
-    it('creates a session with files loaded from remote', async () => {
+    it('creates a session with files loaded from DB cache', async () => {
+      (deps.fileRepo.findConfigFilesByWorkspace as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { filename: 'SOUL.md', content: '# Soul\nBe helpful.', updatedAt: new Date() },
+        { filename: 'IDENTITY.md', content: '# Identity\nName: Bot', updatedAt: new Date() },
+      ]);
+
       const session = await service.getOrCreateSession('agent-1');
 
       expect(session.agentId).toBe('agent-1');
@@ -75,6 +81,19 @@ describe('BotConfigAgentService', () => {
       expect(session.files.size).toBe(2);
       expect(session.files.get('SOUL.md')?.currentContent).toBe('# Soul\nBe helpful.');
       expect(session.files.get('IDENTITY.md')?.currentContent).toBe('# Identity\nName: Bot');
+      // Should NOT have called SSH
+      expect(deps.sshPool.executeCommand).not.toHaveBeenCalled();
+      expect(deps.fileTransfer.downloadFile).not.toHaveBeenCalled();
+    });
+
+    it('falls back to SSH when DB cache is empty', async () => {
+      const session = await service.getOrCreateSession('agent-1');
+
+      expect(session.files.size).toBe(2);
+      expect(session.files.get('SOUL.md')?.currentContent).toBe('# Soul\nBe helpful.');
+      // Should have called SSH since DB returned empty
+      expect(deps.sshPool.executeCommand).toHaveBeenCalled();
+      expect(deps.fileTransfer.downloadFile).toHaveBeenCalled();
     });
 
     it('reuses existing session for same agent', async () => {
@@ -89,7 +108,7 @@ describe('BotConfigAgentService', () => {
       await expect(service.getOrCreateSession('nonexistent')).rejects.toThrow();
     });
 
-    it('throws when SSH connection fails', async () => {
+    it('throws when SSH connection fails and no DB cache', async () => {
       (deps.sshPool.executeCommand as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('SSH timeout'));
       await expect(service.getOrCreateSession('agent-1')).rejects.toThrow('Failed to connect');
     });

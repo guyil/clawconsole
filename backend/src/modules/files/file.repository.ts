@@ -50,6 +50,28 @@ export class FileRepository implements FileRepositoryInterface {
     return rows.map(this.toManagedFile);
   }
 
+  /**
+   * Fetch .md config/persona files for a specific agent by workspace path prefix.
+   * Used by the config-files endpoint to read from the DB cache instead of SSH.
+   */
+  async findConfigFilesByWorkspace(
+    machineId: string,
+    workspacePath: string,
+  ): Promise<Array<{ filename: string; content: string; updatedAt: Date }>> {
+    const rows = await this.db('managed_files')
+      .where('machine_id', machineId)
+      .where('relative_path', 'like', `${workspacePath}/%.md`)
+      .whereNotNull('content')
+      .select('relative_path', 'content', 'updated_at')
+      .orderBy('relative_path', 'asc');
+
+    return rows.map((row) => ({
+      filename: (row.relative_path as string).replace(`${workspacePath}/`, ''),
+      content: row.content as string,
+      updatedAt: new Date(row.updated_at as string),
+    }));
+  }
+
   async upsertFile(params: {
     machineId: string;
     relativePath: string;

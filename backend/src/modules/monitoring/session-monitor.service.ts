@@ -219,7 +219,8 @@ export class SessionMonitorService {
 
     try {
       const snapshot = await this.repo.findSessionSnapshotByKey(machineId, sessionKey);
-      if (!snapshot?.sessionId) return 0;
+      // Use sessionId from snapshot, falling back to sessionKey itself
+      const sessionId = snapshot?.sessionId ?? sessionKey;
 
       const result = await this.gatewayPool.request<{ messages?: TranscriptMessage[] }>(
         machineId,
@@ -229,7 +230,7 @@ export class SessionMonitorService {
 
       if (!result?.messages?.length) return 0;
 
-      const existingMaxIdx = await this.repo.getMaxMessageIndex(machineId, snapshot.sessionId);
+      const existingMaxIdx = await this.repo.getMaxMessageIndex(machineId, sessionId);
 
       const newMessages: InsertSessionMessageInput[] = [];
       for (let i = 0; i < result.messages.length; i++) {
@@ -242,7 +243,7 @@ export class SessionMonitorService {
         newMessages.push({
           machineId,
           agentId,
-          sessionId: snapshot.sessionId,
+          sessionId,
           messageIndex: i,
           role,
           content,
@@ -274,6 +275,7 @@ export class SessionMonitorService {
 
   /**
    * Pull transcript messages for a session via SSH.
+   * Searches across agent directories if the primary path doesn't yield results.
    */
   async pullTranscriptViaSSH(
     machineId: string,
@@ -288,13 +290,47 @@ export class SessionMonitorService {
         ? openclawHome.replace('~', '$HOME')
         : openclawHome;
       const filename = sessionFile ?? `${sessionId}.jsonl`;
-      const filePath = `${home}/agents/${agentId}/sessions/${filename}`;
 
-      const { stdout: content } = await this.sshPool.executeCommand(
+      // Try primary path first, then search across all agent directories
+      let content = '';
+      let resolvedAgentId = agentId;
+
+      const primaryPath = `${home}/agents/${agentId}/sessions/${filename}`;
+      const { stdout: primaryContent } = await this.sshPool.executeCommand(
         connInfo,
-        `cat "${filePath}" 2>/dev/null || true`,
+        `cat "${primaryPath}" 2>/dev/null || true`,
         { timeoutMs: 30_000 },
       );
+
+      if (primaryContent.trim()) {
+        content = primaryContent;
+      } else {
+        // Fallback: search for the session file across all agent directories
+        const { stdout: foundPath } = await this.sshPool.executeCommand(
+          connInfo,
+          `find ${home}/agents -maxdepth 3 -name "${filename}" -type f 2>/dev/null | head -1`,
+          { timeoutMs: 15_000 },
+        );
+
+        if (foundPath.trim()) {
+          // Extract the actual agentId from the found path
+          const pathMatch = foundPath.trim().match(/\/agents\/([^/]+)\/sessions\//);
+          if (pathMatch) {
+            resolvedAgentId = pathMatch[1];
+          }
+
+          const { stdout: fallbackContent } = await this.sshPool.executeCommand(
+            connInfo,
+            `cat "${foundPath.trim()}" 2>/dev/null || true`,
+            { timeoutMs: 30_000 },
+          );
+          content = fallbackContent;
+          log.info(
+            { machineId, agentId, resolvedAgentId, sessionId },
+            'Found transcript in different agent directory',
+          );
+        }
+      }
 
       if (!content.trim()) return 0;
 
@@ -321,7 +357,7 @@ export class SessionMonitorService {
 
           newMessages.push({
             machineId,
-            agentId,
+            agentId: resolvedAgentId,
             sessionId,
             messageIndex: messageIdx,
             role,
@@ -349,7 +385,7 @@ export class SessionMonitorService {
         await this.repo.insertSessionMessages(newMessages);
       }
 
-      log.info({ machineId, agentId, sessionId, newCount: newMessages.length }, 'Pulled transcript via SSH');
+      log.info({ machineId, agentId: resolvedAgentId, sessionId, newCount: newMessages.length }, 'Pulled transcript via SSH');
       return newMessages.length;
     } catch (err) {
       log.error({ machineId, agentId, sessionId, err: (err as Error).message }, 'Failed to pull transcript via SSH');
@@ -359,16 +395,20 @@ export class SessionMonitorService {
 }
 
 function extractAgentIdFromKey(sessionKey: string): string {
-  // Session keys follow patterns like:
-  //   agent:<agentId>:main
-  //   agent:<agentId>:<channel>:direct:<peerId>
-  //   agent:<agentId>:<channel>:group:<id>
-  //   cron:<jobId>
+  // Standard format: agent:<agentId>:<channel>:direct:<peerId>
+  //                   agent:<agentId>:main
+  //                   cron:<jobId>
+  // Legacy/channel format: <channel>:<peerId> (e.g. feishu:ou_xxx, telegram:12345)
   const parts = sessionKey.split(':');
   if (parts[0] === 'agent' && parts.length >= 2) {
     return parts[1];
   }
-  return parts[0] ?? 'unknown';
+  // For non-agent-prefixed keys (legacy channel format), the session
+  // belongs to the default 'main' agent, not the channel name.
+  if (parts[0] === 'cron') {
+    return parts[0];
+  }
+  return 'main';
 }
 
 function extractTextContent(content: unknown): string | null {

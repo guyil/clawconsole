@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { MachineService } from './machine.service.js';
+import type { GatewayConnectorPool } from '../monitoring/gateway-connector.js';
+import { config } from '../../config/index.js';
 
 const CreateMachineSchema = z.object({
   name: z.string().min(1).max(255),
@@ -21,7 +23,11 @@ const UpdateMachineSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
-export function registerMachineRoutes(fastify: FastifyInstance, machineService: MachineService) {
+export function registerMachineRoutes(
+  fastify: FastifyInstance,
+  machineService: MachineService,
+  gatewayPool?: GatewayConnectorPool,
+) {
   fastify.get('/api/machines', async (request) => {
     const query = request.query as Record<string, string>;
     const machines = await machineService.listMachines({
@@ -34,6 +40,11 @@ export function registerMachineRoutes(fastify: FastifyInstance, machineService: 
   fastify.post('/api/machines', async (request, reply) => {
     const body = CreateMachineSchema.parse(request.body);
     const machine = await machineService.createMachine(body);
+    gatewayPool?.addMachine({
+      machineId: machine.id,
+      host: machine.tailscaleHostname,
+      port: config.gateway.defaultPort,
+    });
     return reply.status(201).send(machine);
   });
 
@@ -50,13 +61,27 @@ export function registerMachineRoutes(fastify: FastifyInstance, machineService: 
 
   fastify.delete('/api/machines/:machineId', async (request, reply) => {
     const { machineId } = request.params as { machineId: string };
+    gatewayPool?.removeMachine(machineId);
     await machineService.deleteMachine(machineId);
     return reply.status(204).send();
   });
 
   fastify.post('/api/machines/:machineId/health-check', async (request) => {
     const { machineId } = request.params as { machineId: string };
-    return machineService.healthCheck(machineId);
+    const result = await machineService.healthCheck(machineId);
+    if (gatewayPool) {
+      if (result.status === 'online') {
+        const machine = await machineService.getMachine(machineId);
+        gatewayPool.addMachine({
+          machineId,
+          host: machine.tailscaleHostname,
+          port: config.gateway.defaultPort,
+        });
+      } else {
+        gatewayPool.removeMachine(machineId);
+      }
+    }
+    return result;
   });
 
   fastify.post('/api/machines/:machineId/discover', async (request) => {

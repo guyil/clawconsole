@@ -30,7 +30,8 @@ import {
   useDeleteSkillFile,
 } from '../hooks/usePlayground';
 import { useSkills } from '../hooks/useSkills';
-import { useAllAgents, useAgentConfigFiles } from '../hooks/useAgents';
+import { useAllAgents } from '../hooks/useAgents';
+import { agentsApi } from '../api/agents.api';
 import type { PlaygroundSession, ValidateSkillResult, SecurityScanResult, BotIdentityFile, SkillFileMap } from '../types/playground';
 import toast from 'react-hot-toast';
 
@@ -68,7 +69,6 @@ export function PlaygroundPage() {
   const scanMutation = useScanSkill();
   const { data: skillsData } = useSkills();
   const { data: agentsData } = useAllAgents();
-  const { data: configFilesData } = useAgentConfigFiles(selectedBotId ?? '');
   const { data: remoteFilesData } = useSkillFiles(activeSession?.id ?? null);
   const updateSkillFileMutation = useUpdateSkillFile();
   const deleteSkillFileMutation = useDeleteSkillFile();
@@ -77,7 +77,6 @@ export function PlaygroundPage() {
   const skills = skillsData?.data ?? [];
   const agents = agentsData?.data ?? [];
   const selectedBot = agents.find((a) => a.id === selectedBotId);
-  const identityFiles: BotIdentityFile[] = configFilesData?.data ?? [];
 
   // Sync remote skill files from optimizer's changes into local state
   const lastSyncRef = useRef<string>('');
@@ -136,6 +135,18 @@ export function PlaygroundPage() {
   const handleStartSession = useCallback(async () => {
     try {
       const skillMdContent = localSkillFiles['SKILL.md'] ?? DEFAULT_SKILL;
+
+      // Fetch identity files on-demand to avoid holding SSH connections
+      let identityFiles: BotIdentityFile[] = [];
+      if (selectedBotId) {
+        try {
+          const resp = await agentsApi.getConfigFiles(selectedBotId);
+          identityFiles = (resp.data ?? []).map((f) => ({ filename: f.filename, content: f.content }));
+        } catch (err) {
+          toast.error('Failed to load bot identity files — starting without bot identity');
+        }
+      }
+
       const session = await createSession.mutateAsync({
         skillCatalogId: selectedSkillId ?? undefined,
         skillMdContent,
@@ -148,7 +159,7 @@ export function PlaygroundPage() {
     } catch {
       // handled by API interceptor
     }
-  }, [createSession, localSkillFiles, selectedSkillId, selectedBotId, identityFiles, selectedBot]);
+  }, [createSession, localSkillFiles, selectedSkillId, selectedBotId, selectedBot]);
 
   const handleStopSession = useCallback(async () => {
     if (!activeSession) return;

@@ -59,7 +59,9 @@ export const config = {
     defaultPort: intEnv('SSH_DEFAULT_PORT', 22),
     connectionTimeoutMs: intEnv('SSH_CONNECTION_TIMEOUT_MS', 10_000),
     idleTimeoutMs: intEnv('SSH_IDLE_TIMEOUT_MS', 300_000),
-    maxConnectionsPerMachine: intEnv('SSH_MAX_CONNECTIONS_PER_MACHINE', 2),
+    maxConnectionsPerMachine: intEnv('SSH_MAX_CONNECTIONS_PER_MACHINE', 4),
+    queueTimeoutMs: intEnv('SSH_QUEUE_TIMEOUT_MS', 30_000),
+    maxQueueSize: intEnv('SSH_MAX_QUEUE_SIZE', 20),
   },
 
   sync: {
@@ -72,6 +74,12 @@ export const config = {
     healthCheckIntervalS: intEnv('HEALTH_CHECK_INTERVAL_S', 60),
     autoPullIntervalS: intEnv('AUTO_PULL_INTERVAL_S', 300),
     syncRetryIntervalS: intEnv('SYNC_RETRY_INTERVAL_S', 120),
+    sessionSyncIntervalS: intEnv('SESSION_SYNC_INTERVAL_S', 60),
+    logCollectorIntervalS: intEnv('LOG_COLLECTOR_INTERVAL_S', 300),
+  },
+
+  gateway: {
+    defaultPort: intEnv('GATEWAY_DEFAULT_PORT', 18789),
   },
 
   playground: {

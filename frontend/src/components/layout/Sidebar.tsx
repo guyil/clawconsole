@@ -12,6 +12,7 @@ import {
   MessageSquare,
   FileText,
   FlaskConical,
+  Terminal,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { to: '/monitoring/logs', label: '日志监控', icon: FileText },
   { to: '/skills', label: 'Skills 中心', icon: Puzzle },
   { to: '/playground', label: 'Skills Playground', icon: FlaskConical },
+  { to: '/assistant', label: 'AI 助手', icon: Terminal },
   { to: '/credentials', label: '凭证管理', icon: KeyRound },
   { to: '/settings', label: '系统设置', icon: Settings },
 ];

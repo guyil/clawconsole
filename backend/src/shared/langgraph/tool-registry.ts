@@ -36,18 +36,20 @@ export function createWriteFileTool(sandboxDir: string): LangGraphToolDef {
     description: 'Write content to a file within the sandbox directory.',
     schema: {
       filePath: { type: 'string', description: 'Relative path to the file' },
-      content: { type: 'string', description: 'Content to write' },
+      fileContent: { type: 'string', description: 'The text content to write to the file' },
     },
     handler: async (args) => {
       const filePath = args.filePath as string;
-      const content = args.content as string;
+      const fileContent = (args.fileContent ?? args.content) as string;
+      if (!filePath) return 'Error: filePath is required';
+      if (!fileContent) return 'Error: fileContent is required';
       const resolved = path.resolve(sandboxDir, filePath);
       if (!resolved.startsWith(sandboxDir)) {
         return 'Error: Path traversal not allowed';
       }
       try {
         await fs.mkdir(path.dirname(resolved), { recursive: true });
-        await fs.writeFile(resolved, content, 'utf-8');
+        await fs.writeFile(resolved, fileContent, 'utf-8');
         return `File written: ${filePath}`;
       } catch (err) {
         return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;

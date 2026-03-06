@@ -22,11 +22,20 @@ interface PooledConnection {
   inUse: boolean;
 }
 
+interface QueuedRequest {
+  resolve: (client: Client) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class SSHPool {
   private connections = new Map<string, PooledConnection[]>();
+  private waitQueues = new Map<string, QueuedRequest[]>();
   private maxPerMachine = config.ssh.maxConnectionsPerMachine;
   private idleTimeoutMs = config.ssh.idleTimeoutMs;
   private connectionTimeoutMs = config.ssh.connectionTimeoutMs;
+  private queueTimeoutMs = config.ssh.queueTimeoutMs;
+  private maxQueueSize = config.ssh.maxQueueSize;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -37,6 +46,7 @@ export class SSHPool {
     const pool = this.connections.get(info.machineId) ?? [];
     this.connections.set(info.machineId, pool);
 
+    // Try to reuse an idle, alive connection
     const idle = pool.find((c) => !c.inUse && this.isAlive(c));
     if (idle) {
       idle.inUse = true;
@@ -45,30 +55,74 @@ export class SSHPool {
       return idle.client;
     }
 
-    if (pool.length >= this.maxPerMachine) {
-      const oldest = pool.find((c) => !c.inUse);
-      if (oldest) {
-        oldest.client.end();
-        pool.splice(pool.indexOf(oldest), 1);
-      } else {
-        throw new MachineUnreachableError(
-          info.machineId,
-          `All ${this.maxPerMachine} SSH connections are in use`,
-        );
+    // Room to create a new connection
+    if (pool.length < this.maxPerMachine) {
+      // Evict dead idle connections before creating new ones
+      const deadIdle = pool.find((c) => !c.inUse && !this.isAlive(c));
+      if (deadIdle) {
+        deadIdle.client.end();
+        pool.splice(pool.indexOf(deadIdle), 1);
       }
+
+      const client = await this.createConnection(info);
+      const pooled: PooledConnection = {
+        client,
+        info,
+        createdAt: Date.now(),
+        lastUsedAt: Date.now(),
+        inUse: true,
+      };
+      pool.push(pooled);
+      return client;
     }
 
-    const client = await this.createConnection(info);
-    const pooled: PooledConnection = {
-      client,
-      info,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now(),
-      inUse: true,
-    };
-    pool.push(pooled);
+    // Pool is full — evict oldest idle (not-alive) connection if any
+    const oldestIdle = pool.find((c) => !c.inUse);
+    if (oldestIdle) {
+      oldestIdle.client.end();
+      pool.splice(pool.indexOf(oldestIdle), 1);
 
-    return client;
+      const client = await this.createConnection(info);
+      const pooled: PooledConnection = {
+        client,
+        info,
+        createdAt: Date.now(),
+        lastUsedAt: Date.now(),
+        inUse: true,
+      };
+      pool.push(pooled);
+      return client;
+    }
+
+    // All connections in use — enqueue a waiter
+    const queue = this.waitQueues.get(info.machineId) ?? [];
+    this.waitQueues.set(info.machineId, queue);
+
+    if (queue.length >= this.maxQueueSize) {
+      throw new MachineUnreachableError(
+        info.machineId,
+        `SSH operation queue is full (${this.maxQueueSize} pending)`,
+      );
+    }
+
+    return new Promise<Client>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = queue.findIndex((q) => q.resolve === resolve);
+        if (idx !== -1) queue.splice(idx, 1);
+        reject(
+          new MachineUnreachableError(
+            info.machineId,
+            `Timed out waiting for SSH connection (${this.queueTimeoutMs}ms)`,
+          ),
+        );
+      }, this.queueTimeoutMs);
+
+      queue.push({ resolve, reject, timer });
+      log.debug(
+        { machineId: info.machineId, queueLength: queue.length },
+        'SSH request queued',
+      );
+    });
   }
 
   releaseConnection(machineId: string, client: Client): void {
@@ -76,10 +130,22 @@ export class SSHPool {
     if (!pool) return;
 
     const entry = pool.find((c) => c.client === client);
-    if (entry) {
-      entry.inUse = false;
+    if (!entry) return;
+
+    // Check if there's a queued waiter to hand this connection to
+    const queue = this.waitQueues.get(machineId);
+    if (queue && queue.length > 0) {
+      const waiter = queue.shift()!;
+      clearTimeout(waiter.timer);
       entry.lastUsedAt = Date.now();
+      // Connection stays inUse — transferred to the next consumer
+      log.debug({ machineId, queueLength: queue.length }, 'SSH connection handed to queued request');
+      waiter.resolve(client);
+      return;
     }
+
+    entry.inUse = false;
+    entry.lastUsedAt = Date.now();
   }
 
   async executeCommand(
@@ -188,6 +254,16 @@ export class SSHPool {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+
+    // Reject all queued waiters
+    for (const [, queue] of this.waitQueues) {
+      for (const waiter of queue) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error('SSH pool destroyed'));
+      }
+    }
+    this.waitQueues.clear();
+
     for (const pool of this.connections.values()) {
       for (const conn of pool) {
         conn.client.end();

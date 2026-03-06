@@ -63,7 +63,7 @@ function AssistantMessage() {
 
 function Composer({ placeholder }: { placeholder: string }) {
   return (
-    <ComposerPrimitive.Root className="flex items-end gap-2 border-t border-claw-border px-4 py-3 bg-claw-sidebar/30">
+    <ComposerPrimitive.Root className="flex items-end gap-2 border-t border-claw-border px-4 pt-3 pb-5 bg-claw-sidebar/30">
       <ComposerPrimitive.Input
         placeholder={placeholder}
         className="flex-1 bg-claw-bg border border-claw-border rounded-xl px-4 py-2.5 text-sm text-claw-text placeholder-claw-muted focus:border-claw-primary focus:outline-none resize-none min-h-[40px] max-h-[120px]"

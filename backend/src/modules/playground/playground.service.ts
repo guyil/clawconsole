@@ -113,12 +113,12 @@ export class PlaygroundService {
     // Create sandbox directory
     const sandboxDir = await this.ensureSandbox(sessionId);
 
-    // Parse skill and build prompt with identity context
-    const parsed = parseSkillMd(session.skillSnapshot);
-    const systemPrompt = this.buildSystemPrompt(parsed, session.identitySnapshot);
-
-    // Build tools and agent
+    // Build tools first so we can list them in the prompt
     const tools = buildToolSet(sandboxDir, session.config.allowedTools);
+
+    // Parse skill and build prompt with identity context + available tools
+    const parsed = parseSkillMd(session.skillSnapshot);
+    const systemPrompt = this.buildSystemPrompt(parsed, session.identitySnapshot, tools);
     const agent = buildAgent({
       model: session.config.model,
       systemPrompt,
@@ -340,14 +340,18 @@ export class PlaygroundService {
    * Identity-first prompt strategy:
    * 1. Bot identity files (SOUL.md, IDENTITY.md, USER.md) define who the agent is
    * 2. Skill instructions define what the agent can do in this session
+   * 3. Available tools tell the agent what it can actually call
    */
-  private buildSystemPrompt(parsed: ParsedSkill | null, identityFiles?: BotIdentityFile[] | null): string {
+  private buildSystemPrompt(
+    parsed: ParsedSkill | null,
+    identityFiles?: BotIdentityFile[] | null,
+    availableTools?: LangGraphToolDef[],
+  ): string {
     const parts: string[] = [];
 
     // Layer 1: Bot identity (if a bot is selected)
     if (identityFiles && identityFiles.length > 0) {
       parts.push('# Your Identity\n');
-      // Sort: SOUL.md first, then IDENTITY.md, then others
       const sortOrder: Record<string, number> = { 'SOUL.md': 0, 'IDENTITY.md': 1, 'USER.md': 2 };
       const sorted = [...identityFiles].sort(
         (a, b) => (sortOrder[a.filename] ?? 10) - (sortOrder[b.filename] ?? 10),
@@ -359,9 +363,21 @@ export class PlaygroundService {
       parts.push('You are a helpful AI assistant in the OpenClaw Playground.\n');
     }
 
-    // Layer 2: Skill instructions
+    // Layer 2: Available tools — critical for the agent to know what it can actually do
+    if (availableTools && availableTools.length > 0) {
+      parts.push('# Available Tools\n');
+      parts.push('You can ONLY use the following tools. Do NOT attempt to call any other tools.\n');
+      for (const t of availableTools) {
+        const params = Object.keys(t.schema).join(', ');
+        parts.push(`- **${t.name}**${params ? ` (${params})` : ''}: ${t.description}`);
+      }
+      parts.push('');
+    }
+
+    // Layer 3: Skill instructions
     parts.push('# Active Skill\n');
-    parts.push('Follow the skill instructions below as your current capabilities.\n');
+    parts.push('Follow the skill instructions below. Adapt the instructions to work with your available tools listed above.\n');
+    parts.push('If the skill references tools or commands you do not have, use your available tools to accomplish the same goal.\n');
 
     if (parsed?.frontmatter.description) {
       parts.push(`## Skill Description\n${parsed.frontmatter.description}\n`);
@@ -398,11 +414,15 @@ export class PlaygroundService {
         description: 'Create or overwrite a file in the skill directory. Changes are reflected in the editor immediately.',
         schema: {
           filePath: { type: 'string', description: 'Relative path (e.g. "SKILL.md", "reference.md", "scripts/helper.py")' },
-          content: { type: 'string', description: 'Full file content to write' },
+          fileContent: { type: 'string', description: 'The full file content to write' },
         },
         handler: async (args) => {
-          await this.updateSkillFile(sessionId, args.filePath as string, args.content as string);
-          return `Written: ${args.filePath}`;
+          const filePath = args.filePath as string;
+          const fileContent = (args.fileContent ?? args.content) as string;
+          if (!filePath) return 'Error: filePath is required';
+          if (!fileContent) return 'Error: fileContent is required';
+          await this.updateSkillFile(sessionId, filePath, fileContent);
+          return `Written: ${filePath}`;
         },
       },
       {

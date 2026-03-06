@@ -21,13 +21,14 @@ function buildZodSchema(schemaDef: Record<string, unknown>): z.ZodObject<Record<
       if (fieldDef.type === 'number') fieldSchema = z.number();
       if (fieldDef.type === 'boolean') fieldSchema = z.boolean();
       if (fieldDef.description) fieldSchema = fieldSchema.describe(fieldDef.description);
-      shape[key] = fieldSchema;
+      // Optional to avoid strict rejections; handlers validate required fields
+      shape[key] = fieldSchema.optional();
     }
   }
   if (Object.keys(shape).length === 0) {
-    return z.object({});
+    return z.object({}).passthrough();
   }
-  return z.object(shape);
+  return z.object(shape).passthrough();
 }
 
 /**

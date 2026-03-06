@@ -76,7 +76,8 @@ export class BotConfigAgentService {
 
   /**
    * Gets or creates a config chat session for the given agent.
-   * Loads current config files from the remote machine via SSH.
+   * Loads config files from the local DB cache first; falls back to SSH
+   * only when no cached files exist (first sync or empty DB).
    */
   async getOrCreateSession(agentId: string): Promise<ConfigChatSession> {
     // Reuse existing active session
@@ -91,39 +92,53 @@ export class BotConfigAgentService {
     if (!agent) throw new NotFoundError('Agent', agentId);
 
     const machine = await this.machineService.getMachine(agent.machineId);
-    const connInfo = this.machineService.toConnectionInfo(machine);
     const workspace = agent.workspacePath ?? 'workspace';
 
-    // Load config files from remote machine
     const files = new Map<string, { filename: string; originalContent: string; currentContent: string; dirty: boolean }>();
 
-    try {
-      const { stdout } = await this.sshPool.executeCommand(
-        connInfo,
-        `cd ${machine.openclawHome}/${workspace} && pwd && ls -1 *.md 2>/dev/null`,
-        { timeoutMs: 10_000 },
-      );
-      const lines = stdout.split('\n').filter(Boolean);
-      if (lines.length > 0) {
-        const absBasePath = lines[0];
-        const filenames = lines.slice(1);
-        for (const filename of filenames) {
-          try {
-            const content = await this.fileTransfer.downloadFile(connInfo, `${absBasePath}/${filename}`);
-            files.set(filename, {
-              filename,
-              originalContent: content,
-              currentContent: content,
-              dirty: false,
-            });
-          } catch {
-            log.warn({ agentId, filename }, 'Failed to download config file');
+    // Try loading from local DB cache first
+    const cachedFiles = await this.fileRepo.findConfigFilesByWorkspace(machine.id, workspace);
+    if (cachedFiles.length > 0) {
+      for (const cached of cachedFiles) {
+        files.set(cached.filename, {
+          filename: cached.filename,
+          originalContent: cached.content,
+          currentContent: cached.content,
+          dirty: false,
+        });
+      }
+      log.info({ agentId, fileCount: files.size }, 'Loaded config files from DB cache');
+    } else {
+      // Fallback: load from remote machine via SSH (first time / empty cache)
+      try {
+        const connInfo = this.machineService.toConnectionInfo(machine);
+        const { stdout } = await this.sshPool.executeCommand(
+          connInfo,
+          `cd ${machine.openclawHome}/${workspace} && pwd && ls -1 *.md 2>/dev/null`,
+          { timeoutMs: 10_000 },
+        );
+        const lines = stdout.split('\n').filter(Boolean);
+        if (lines.length > 0) {
+          const absBasePath = lines[0];
+          const filenames = lines.slice(1);
+          for (const filename of filenames) {
+            try {
+              const content = await this.fileTransfer.downloadFile(connInfo, `${absBasePath}/${filename}`);
+              files.set(filename, {
+                filename,
+                originalContent: content,
+                currentContent: content,
+                dirty: false,
+              });
+            } catch {
+              log.warn({ agentId, filename }, 'Failed to download config file');
+            }
           }
         }
+      } catch (err) {
+        log.error({ err, agentId }, 'Failed to load config files from remote');
+        throw new AppError('Failed to connect to remote machine to load config files', 'SSH_ERROR', 502);
       }
-    } catch (err) {
-      log.error({ err, agentId }, 'Failed to load config files from remote');
-      throw new AppError('Failed to connect to remote machine to load config files', 'SSH_ERROR', 502);
     }
 
     const session: ConfigChatSession = {
