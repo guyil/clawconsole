@@ -168,6 +168,46 @@ async function main() {
     return { data: agents, total: agents.length };
   });
 
+  fastify.post('/api/machines/:machineId/agents', async (request, reply) => {
+    const { machineId } = request.params as { machineId: string };
+    const body = request.body as {
+      agentId: string;
+      name?: string;
+      description?: string;
+      isDefault?: boolean;
+    };
+
+    if (!body.agentId || typeof body.agentId !== 'string') {
+      throw new AppError('agentId is required', 'VALIDATION_ERROR', 400);
+    }
+
+    if (!/^[a-z][a-z0-9_-]{1,49}$/.test(body.agentId)) {
+      throw new AppError(
+        'agentId must start with a lowercase letter and contain only lowercase letters, numbers, hyphens, and underscores (2-50 chars)',
+        'VALIDATION_ERROR',
+        400,
+      );
+    }
+
+    const machine = await machineRepo.findById(machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    const existing = await agentRepo.findByMachineAndAgentId(machineId, body.agentId);
+    if (existing) {
+      throw new AppError(`Agent "${body.agentId}" already exists on this machine`, 'CONFLICT', 409);
+    }
+
+    const agent = await agentRepo.create({
+      machineId,
+      agentId: body.agentId,
+      name: body.name,
+      description: body.description,
+      isDefault: body.isDefault,
+    });
+
+    return reply.status(201).send(agent);
+  });
+
   fastify.get('/api/agents/:agentId', async (request) => {
     const { agentId } = request.params as { agentId: string };
     const agent = await agentRepo.findById(agentId);
