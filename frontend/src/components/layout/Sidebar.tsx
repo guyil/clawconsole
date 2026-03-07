@@ -13,6 +13,9 @@ import {
   FileText,
   FlaskConical,
   Terminal,
+  Workflow,
+  Play,
+  UserCheck,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 
@@ -23,6 +26,9 @@ const NAV_ITEMS = [
   { to: '/monitoring', label: '活动监控', icon: Activity },
   { to: '/monitoring/sessions', label: '会话监控', icon: MessageSquare },
   { to: '/monitoring/logs', label: '日志监控', icon: FileText },
+  { to: '/workflows', label: '工作流', icon: Workflow },
+  { to: '/workflows/runs', label: '运行记录', icon: Play },
+  { to: '/reviews', label: '审核收件箱', icon: UserCheck },
   { to: '/skills', label: 'Skills 中心', icon: Puzzle },
   { to: '/playground', label: 'Skills Playground', icon: FlaskConical },
   { to: '/assistant', label: 'AI 助手', icon: Terminal },

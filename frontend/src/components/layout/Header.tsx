@@ -9,6 +9,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/credentials': '凭证管理',
   '/assistant': 'AI 助手',
   '/settings': '系统设置',
+  '/workflows': '工作流',
+  '/reviews': '审核收件箱',
 };
 
 export function Header() {
@@ -17,7 +19,7 @@ export function Header() {
 
   const basePath = '/' + (pathname.split('/')[1] ?? '');
   const title =
-    PAGE_TITLES[basePath] ?? (pathname.startsWith('/machines/') ? '节点详情' : '');
+    PAGE_TITLES[basePath] ?? (pathname.startsWith('/machines/') ? '节点详情' : pathname.startsWith('/workflows/runs/') ? '运行详情' : pathname.startsWith('/workflows/runs') ? '运行记录' : pathname.startsWith('/workflows/') ? '工作流编辑' : '');
 
   return (
     <header className="flex items-center justify-between px-7 py-4 border-b border-claw-border bg-claw-sidebar">
