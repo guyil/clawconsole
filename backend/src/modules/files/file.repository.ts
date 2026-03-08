@@ -1,6 +1,8 @@
+import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, type Knex } from '../../shared/db.js';
 import { classifyFile, detectFileType, extractAgentId, type FileCategory, type FileType } from '../../shared/file-classifier.js';
+import { classifyMemoryFile, type MemoryFileRecord } from '../../shared/memory-classifier.js';
 import { hashContent } from '../../shared/crypto.js';
 import type { ManagedFile, FileListFilters } from './file.types.js';
 import type { LocalFileState } from '../sync/sync.types.js';
@@ -68,6 +70,39 @@ export class FileRepository implements FileRepositoryInterface {
     return rows.map((row) => ({
       filename: (row.relative_path as string).replace(`${workspacePath}/`, ''),
       content: row.content as string,
+      updatedAt: new Date(row.updated_at as string),
+    }));
+  }
+
+  /**
+   * Fetch memory files (.md only, no .sqlite) for a specific agent.
+   * Returns files from both workspace root (MEMORY.md) and memory/ subdirectory.
+   */
+  async findMemoryFilesByAgent(
+    machineId: string,
+    workspacePath: string,
+  ): Promise<MemoryFileRecord[]> {
+    // Don't filter by file_type: MEMORY.md at workspace root is classified
+    // as 'other' (not 'memory') by detectFileType, so match by path only.
+    const rows = await this.db('managed_files')
+      .where('machine_id', machineId)
+      .whereNotNull('content')
+      .where(function () {
+        this.where('relative_path', 'like', `${workspacePath}/memory/%.md`)
+          .orWhere('relative_path', `${workspacePath}/MEMORY.md`)
+          .orWhere('relative_path', `${workspacePath}/memory.md`);
+      })
+      .select('id', 'relative_path', 'content', 'remote_mtime', 'remote_size', 'updated_at')
+      .orderBy('remote_mtime', 'desc');
+
+    return rows.map((row) => ({
+      id: row.id as string,
+      relativePath: row.relative_path as string,
+      filename: path.basename(row.relative_path as string),
+      content: row.content as string,
+      category: classifyMemoryFile(row.relative_path as string),
+      mtime: row.remote_mtime ? Number(row.remote_mtime) : null,
+      size: row.remote_size ? Number(row.remote_size) : null,
       updatedAt: new Date(row.updated_at as string),
     }));
   }

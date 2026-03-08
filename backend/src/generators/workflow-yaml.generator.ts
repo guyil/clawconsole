@@ -1,143 +1,178 @@
 import yaml from 'js-yaml';
 import type { Workflow, WorkflowNodeDef, WorkflowEdgeDef } from '../modules/workflows/workflow.types.js';
 
-interface LobsterWorkflowYaml {
-  apiVersion: string;
-  kind: string;
-  metadata: {
-    name: string;
-    description?: string;
-    version: string;
-  };
-  trigger?: {
-    type: string;
-    channel?: string;
-    pattern?: string;
-    cron?: string;
-  };
-  variables?: Record<string, unknown>;
-  nodes: LobsterNode[];
-  edges: LobsterEdge[];
-}
-
-interface LobsterNode {
+interface LobsterStep {
   id: string;
-  type: string;
-  name: string;
-  skillRef?: string;
-  input?: Record<string, string>;
-  output?: string;
-  timeout?: string;
-  retryPolicy?: { maxRetries: number; backoff?: string };
-  onError?: string;
-  reviewers?: Array<Record<string, string>>;
-  policy?: string;
-  escalation?: {
-    action: string;
-    target: Array<Record<string, string>>;
-    message?: string;
-  };
-  payload?: Record<string, string>;
-  expression?: string;
-  branches?: Array<{ condition: string; target: string }>;
-  default?: string;
-}
-
-interface LobsterEdge {
-  source: string;
-  target: string;
+  command: string;
+  stdin?: string;
+  approval?: string;
   condition?: string;
 }
 
-function nodeDefToLobster(node: WorkflowNodeDef): LobsterNode {
-  const base: LobsterNode = {
-    id: node.id,
-    type: node.type,
-    name: node.name,
-  };
-
-  if (node.type === 'skill') {
-    base.skillRef = node.skillRef;
-    if (node.input && Object.keys(node.input).length > 0) base.input = node.input;
-    base.output = node.output;
-    if (node.timeout) base.timeout = node.timeout;
-    if (node.retryPolicy) base.retryPolicy = node.retryPolicy;
-    if (node.onError && node.onError !== 'abort') base.onError = node.onError;
-  }
-
-  if (node.type === 'review') {
-    base.reviewers = node.reviewers.map((r) => {
-      const ref: Record<string, string> = {};
-      if (r.userId) ref.userId = r.userId;
-      if (r.role) ref.role = r.role;
-      if (r.group) ref.group = r.group;
-      return ref;
-    });
-    base.policy = node.policy;
-    if (node.timeout) base.timeout = node.timeout;
-    if (node.escalation) {
-      base.escalation = {
-        action: node.escalation.action,
-        target: node.escalation.target.map((t) => {
-          const ref: Record<string, string> = {};
-          if (t.userId) ref.userId = t.userId;
-          if (t.role) ref.role = t.role;
-          if (t.group) ref.group = t.group;
-          return ref;
-        }),
-      };
-      if (node.escalation.message) base.escalation.message = node.escalation.message;
-    }
-    if (node.payload && Object.keys(node.payload).length > 0) base.payload = node.payload;
-  }
-
-  if (node.type === 'condition') {
-    base.expression = node.expression;
-    base.branches = node.branches;
-    if (node.default) base.default = node.default;
-  }
-
-  return base;
-}
-
-function edgeDefToLobster(edge: WorkflowEdgeDef): LobsterEdge {
-  const result: LobsterEdge = { source: edge.source, target: edge.target };
-  if (edge.condition) result.condition = edge.condition;
-  return result;
+interface LobsterPipeline {
+  name: string;
+  args?: Record<string, { default?: unknown }>;
+  steps: LobsterStep[];
 }
 
 /**
- * Generate a Lobster-compatible YAML string from a Workflow entity.
+ * Topologically sort nodes using edges (Kahn's algorithm).
+ * Falls back to original order for nodes not connected by edges.
  */
-export function generateWorkflowYaml(workflow: Workflow): string {
-  const doc: LobsterWorkflowYaml = {
-    apiVersion: 'lobster/v1',
-    kind: 'Workflow',
-    metadata: {
-      name: workflow.name,
-      version: workflow.version,
-    },
+function topologicalSort(nodes: WorkflowNodeDef[], edges: WorkflowEdgeDef[]): WorkflowNodeDef[] {
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const inDegree = new Map<string, number>();
+  const adjacency = new Map<string, string[]>();
+
+  for (const node of nodes) {
+    inDegree.set(node.id, 0);
+    adjacency.set(node.id, []);
+  }
+
+  for (const edge of edges) {
+    if (nodeMap.has(edge.source) && nodeMap.has(edge.target)) {
+      adjacency.get(edge.source)!.push(edge.target);
+      inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) queue.push(id);
+  }
+
+  const sorted: WorkflowNodeDef[] = [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const node = nodeMap.get(id);
+    if (node) sorted.push(node);
+
+    for (const neighbor of adjacency.get(id) ?? []) {
+      const newDeg = (inDegree.get(neighbor) ?? 1) - 1;
+      inDegree.set(neighbor, newDeg);
+      if (newDeg === 0) queue.push(neighbor);
+    }
+  }
+
+  // Include any disconnected nodes that weren't reached
+  for (const node of nodes) {
+    if (!sorted.find((s) => s.id === node.id)) {
+      sorted.push(node);
+    }
+  }
+
+  return sorted;
+}
+
+/**
+ * Build a map from target nodeId -> source nodeId for stdin references.
+ */
+function buildStdinMap(edges: WorkflowEdgeDef[]): Map<string, string> {
+  const stdinMap = new Map<string, string>();
+  for (const edge of edges) {
+    // Each node takes stdin from its first incoming edge source
+    if (!stdinMap.has(edge.target)) {
+      stdinMap.set(edge.target, edge.source);
+    }
+  }
+  return stdinMap;
+}
+
+function nodeToStep(
+  node: WorkflowNodeDef,
+  stdinMap: Map<string, string>,
+  edgeConditions: Map<string, string>,
+): LobsterStep {
+  const step: LobsterStep = {
+    id: node.id,
+    command: '',
   };
 
-  if (workflow.description) {
-    doc.metadata.description = workflow.description;
+  if (node.type === 'skill') {
+    step.command = node.command;
+
+    const stdinSource = node.stdin || (stdinMap.has(node.id) ? `$${stdinMap.get(node.id)}.stdout` : undefined);
+    if (stdinSource) step.stdin = stdinSource;
   }
 
-  if (workflow.triggerConfig && workflow.triggerConfig.type !== 'manual') {
-    doc.trigger = { type: workflow.triggerConfig.type };
-    if (workflow.triggerConfig.channel) doc.trigger.channel = workflow.triggerConfig.channel;
-    if (workflow.triggerConfig.pattern) doc.trigger.pattern = workflow.triggerConfig.pattern;
-    if (workflow.triggerConfig.cron) doc.trigger.cron = workflow.triggerConfig.cron;
+  if (node.type === 'review') {
+    // Approval gate — command shows a prompt, Lobster pauses for approval
+    step.command = node.prompt
+      ? `echo ${JSON.stringify(node.prompt)}`
+      : `echo "Review required: ${node.name}"`;
+    step.approval = 'required';
+
+    const stdinSource = stdinMap.get(node.id);
+    if (stdinSource) step.stdin = `$${stdinSource}.stdout`;
   }
 
+  if (node.type === 'condition') {
+    step.command = `echo "Condition: ${node.expression}"`;
+    step.condition = node.expression;
+  }
+
+  // Apply edge-based conditions (from condition nodes' branches)
+  const edgeCondition = edgeConditions.get(node.id);
+  if (edgeCondition && !step.condition) {
+    step.condition = edgeCondition;
+  }
+
+  return step;
+}
+
+/**
+ * Build a map of nodeId -> condition expression from condition nodes' branches and edges.
+ */
+function buildEdgeConditions(
+  nodes: WorkflowNodeDef[],
+  edges: WorkflowEdgeDef[],
+): Map<string, string> {
+  const conditions = new Map<string, string>();
+
+  for (const node of nodes) {
+    if (node.type === 'condition') {
+      for (const branch of node.branches) {
+        conditions.set(branch.target, branch.condition);
+      }
+    }
+  }
+
+  // Also pick up conditions from edges directly
+  for (const edge of edges) {
+    if (edge.condition && !conditions.has(edge.target)) {
+      conditions.set(edge.target, edge.condition);
+    }
+  }
+
+  return conditions;
+}
+
+/**
+ * Generate a Lobster-compatible .lobster YAML string from a Workflow entity.
+ */
+export function generateWorkflowYaml(workflow: Workflow): string {
+  const sortedNodes = topologicalSort(workflow.nodes, workflow.edges);
+  const stdinMap = buildStdinMap(workflow.edges);
+  const edgeConditions = buildEdgeConditions(workflow.nodes, workflow.edges);
+
+  const steps: LobsterStep[] = sortedNodes.map((node) =>
+    nodeToStep(node, stdinMap, edgeConditions),
+  );
+
+  const pipeline: LobsterPipeline = {
+    name: workflow.workflowKey || workflow.name,
+    steps,
+  };
+
+  // Map workflow variables to Lobster args format
   if (workflow.variables && Object.keys(workflow.variables).length > 0) {
-    doc.variables = workflow.variables;
+    pipeline.args = {};
+    for (const [key, value] of Object.entries(workflow.variables)) {
+      pipeline.args[key] = { default: value };
+    }
   }
 
-  doc.nodes = workflow.nodes.map(nodeDefToLobster);
-  doc.edges = workflow.edges.map(edgeDefToLobster);
-
-  return yaml.dump(doc, {
+  return yaml.dump(pipeline, {
     indent: 2,
     lineWidth: 120,
     noRefs: true,

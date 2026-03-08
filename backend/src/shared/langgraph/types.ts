@@ -2,6 +2,8 @@ export interface LangGraphAgentConfig {
   model: string;
   systemPrompt: string;
   tools: LangGraphToolDef[];
+  maxTokens?: number;
+  temperature?: number;
   maxToolCalls?: number;
   timeoutMs?: number;
 }

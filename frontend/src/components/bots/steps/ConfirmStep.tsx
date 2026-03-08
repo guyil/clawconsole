@@ -1,14 +1,25 @@
-import { Server, Bot, FolderOpen, FileText } from 'lucide-react';
+import { Server, Bot, FolderOpen, FileText, MessageSquare, Terminal } from 'lucide-react';
 import { Badge } from '../../ui/Badge';
 import type { Machine } from '../../../types/machine';
 import type { BotInfoData } from './BotInfoStep';
+import type { ChannelBinding } from './ChannelConfigStep';
+
+const CHANNEL_LABELS: Record<string, { label: string; icon: string }> = {
+  telegram: { label: 'Telegram', icon: '🤖' },
+  discord: { label: 'Discord', icon: '🎮' },
+  slack: { label: 'Slack', icon: '💼' },
+  feishu: { label: '飞书', icon: '🐦' },
+  whatsapp: { label: 'WhatsApp', icon: '💬' },
+  signal: { label: 'Signal', icon: '🔒' },
+};
 
 interface ConfirmStepProps {
   machine: Machine;
   botInfo: BotInfoData;
+  channels?: ChannelBinding[];
 }
 
-export function ConfirmStep({ machine, botInfo }: ConfirmStepProps) {
+export function ConfirmStep({ machine, botInfo, channels = [] }: ConfirmStepProps) {
   const workspacePath = botInfo.isDefault ? 'workspace' : `workspace-${botInfo.agentId}`;
 
   return (
@@ -49,6 +60,73 @@ export function ConfirmStep({ machine, botInfo }: ConfirmStepProps) {
           </div>
           {botInfo.isDefault && <Badge variant="info">默认</Badge>}
         </div>
+
+        {/* Channel bindings */}
+        {channels.length > 0 && (
+          <>
+            <div className="border-t border-claw-border" />
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center">
+                <MessageSquare size={16} className="text-green-400" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[11px] text-claw-muted">消息渠道</div>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {channels.map((ch, i) => {
+                    const info = CHANNEL_LABELS[ch.channelType];
+                    const needsPostDeploy = ch.channelType === 'whatsapp' || ch.channelType === 'signal';
+                    return (
+                      <div
+                        key={`${ch.channelType}-${i}`}
+                        className="flex items-center gap-1.5 px-2 py-1 bg-claw-card border border-claw-border rounded-md text-xs"
+                      >
+                        <span>{info?.icon ?? '📡'}</span>
+                        <span className="text-claw-text font-medium">
+                          {info?.label ?? ch.channelType}
+                        </span>
+                        <span className="text-claw-muted">:{ch.accountId}</span>
+                        {needsPostDeploy && (
+                          <Badge variant="warning">部署后配置</Badge>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Deployment pipeline steps */}
+      <div>
+        <div className="text-sm font-medium text-claw-text mb-2">部署执行步骤</div>
+        <div className="bg-claw-bg rounded-lg border border-claw-border p-3 space-y-2 font-mono text-xs">
+          <DeployStep
+            step={1}
+            label="创建 Agent"
+            command={`openclaw agents add ${botInfo.agentId} --non-interactive --workspace ${workspacePath}`}
+          />
+          {channels.map((ch, i) => (
+            <div key={`steps-${ch.channelType}-${i}`} className="space-y-2">
+              <DeployStep
+                step={2 + i * 2}
+                label={`配置渠道 ${CHANNEL_LABELS[ch.channelType]?.label ?? ch.channelType}`}
+                command={`jq '.channels.${ch.channelType}.accounts.${ch.accountId} = {...}' openclaw.json`}
+              />
+              <DeployStep
+                step={3 + i * 2}
+                label={`绑定渠道路由`}
+                command={`openclaw agents bind --agent ${botInfo.agentId} --bind ${ch.channelType}:${ch.accountId}`}
+              />
+            </div>
+          ))}
+          <DeployStep
+            step={channels.length > 0 ? 2 + channels.length * 2 : 2}
+            label="重启 Gateway"
+            command="openclaw gateway restart"
+          />
+        </div>
       </div>
 
       {/* File changes */}
@@ -59,7 +137,7 @@ export function ConfirmStep({ machine, botInfo }: ConfirmStepProps) {
             <FileText size={12} />
             <span>openclaw.json</span>
             <Badge variant="warning">修改</Badge>
-            <span className="text-claw-muted">新增 agent 条目</span>
+            <span className="text-claw-muted">新增 agent 条目 + 渠道账户 + 路由绑定</span>
           </div>
           <div className="flex items-center gap-2 text-claw-success">
             <FolderOpen size={12} />
@@ -74,17 +152,29 @@ export function ConfirmStep({ machine, botInfo }: ConfirmStepProps) {
           </div>
           <div className="flex items-center gap-2 text-claw-success pl-4">
             <FileText size={12} />
-            <span>README.md</span>
+            <span>IDENTITY.md</span>
             <Badge variant="success">新建</Badge>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Sync mode */}
-      <div className="flex items-center gap-2 text-xs text-claw-muted">
-        <span>同步模式：</span>
-        <Badge variant="warning">Warm</Badge>
-        <span>需重启 Gateway</span>
+function DeployStep({ step, label, command }: { step: number; label: string; command: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-claw-primary/20 text-claw-primary-light text-[10px] font-bold flex-shrink-0 mt-0.5">
+        {step}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <Terminal size={11} className="text-claw-muted flex-shrink-0" />
+          <span className="text-claw-text">{label}</span>
+        </div>
+        <div className="mt-0.5 text-[10px] text-claw-muted break-all leading-relaxed">
+          $ {command}
+        </div>
       </div>
     </div>
   );

@@ -4,6 +4,9 @@ import type { MachineRepository } from '../machines/machine.repository.js';
 import type { AgentRepository } from '../agents/agent.repository.js';
 import type { SyncRepository } from '../sync/sync.repository.js';
 import type { SSHPool } from '../../transport/ssh-pool.js';
+import type { PlatformSkillRegistry } from '../../shared/platform-skills/registry.js';
+import { createWebFetchTool } from '../../shared/platform-skills/tools/web-fetch.tool.js';
+import { createBrowserTools } from '../../shared/langgraph/browser-tools.js';
 import { createChildLogger } from '../../shared/logger.js';
 
 const log = createChildLogger('assistant-tools');
@@ -14,15 +17,16 @@ export interface AssistantToolDeps {
   agentRepo: AgentRepository;
   syncRepo: SyncRepository;
   sshPool: SSHPool;
+  platformSkills?: PlatformSkillRegistry;
 }
 
 /**
  * Builds the full set of tools available to the AI assistant.
- * These tools give the agent visibility into ClawConsole state
- * and the ability to execute SSH commands on managed machines.
+ * Includes ClawConsole state visibility, SSH commands, browser automation,
+ * and platform skills (agent creation, channel config, deployment, etc.).
  */
-export function buildAssistantTools(deps: AssistantToolDeps): LangGraphToolDef[] {
-  return [
+export function buildAssistantTools(deps: AssistantToolDeps, sessionId?: string): LangGraphToolDef[] {
+  const tools: LangGraphToolDef[] = [
     createListMachinesTool(deps),
     createGetMachineInfoTool(deps),
     createSshExecuteTool(deps),
@@ -31,7 +35,16 @@ export function buildAssistantTools(deps: AssistantToolDeps): LangGraphToolDef[]
     createHealthCheckTool(deps),
     createGetSyncHistoryTool(deps),
     createWebFetchTool(),
+    // Browser tools for web research and interaction
+    ...createBrowserTools(sessionId ?? `assistant-${Date.now()}`),
   ];
+
+  // Inject platform skills if available
+  if (deps.platformSkills) {
+    tools.push(...deps.platformSkills.toLangGraphTools());
+  }
+
+  return tools;
 }
 
 function createListMachinesTool(deps: AssistantToolDeps): LangGraphToolDef {
@@ -116,7 +129,9 @@ function createSshExecuteTool(deps: AssistantToolDeps): LangGraphToolDef {
         const connInfo = deps.machineService.toConnectionInfo(machine);
         log.info({ machineId, command }, 'AI assistant executing SSH command');
 
-        const result = await deps.sshPool.executeCommand(connInfo, command, {
+        const escaped = command.replace(/'/g, "'\\''");
+        const loginCommand = `zsh -lc '${escaped}'`;
+        const result = await deps.sshPool.executeCommand(connInfo, loginCommand, {
           timeoutMs: timeout * 1000,
         });
 
@@ -254,43 +269,3 @@ function createGetSyncHistoryTool(deps: AssistantToolDeps): LangGraphToolDef {
   };
 }
 
-function createWebFetchTool(): LangGraphToolDef {
-  return {
-    name: 'web_fetch',
-    description: 'Fetch the content of a URL and return it as text. Useful for downloading scripts, checking endpoints, or fetching documentation.',
-    schema: {
-      url: { type: 'string', description: 'The URL to fetch (e.g. "https://example.com/install.sh")' },
-    },
-    handler: async (args) => {
-      let url = (args.url as string)?.trim();
-      if (!url) return 'Error: url parameter is required';
-
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = `https://${url}`;
-      }
-
-      try {
-        const response = await fetch(url, {
-          signal: AbortSignal.timeout(15_000),
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; ClawConsole-Assistant/1.0)',
-            Accept: 'text/html,text/plain,application/json,*/*',
-          },
-          redirect: 'follow',
-        });
-
-        if (!response.ok) {
-          return `HTTP ${response.status}: ${response.statusText}`;
-        }
-        const text = await response.text();
-        return text.slice(0, 10_000);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('abort') || msg.includes('timeout')) {
-          return `Error: Request to ${url} timed out.`;
-        }
-        return `Error fetching ${url}: ${msg}`;
-      }
-    },
-  };
-}

@@ -1,5 +1,5 @@
 export type SkillScope = 'global' | 'agent';
-export type SkillSource = 'clawhub' | 'custom' | 'bundled';
+export type SkillSource = 'clawhub' | 'custom' | 'bundled' | 'local';
 export type SkillReviewStatus = 'pending' | 'approved' | 'rejected' | 'deprecated';
 
 export interface SkillCatalogEntry {
@@ -15,6 +15,8 @@ export interface SkillCatalogEntry {
   auxiliaryFiles: Record<string, string> | null;
   requiresBins: string[] | null;
   requiresEnv: string[] | null;
+  tags: string[] | null;
+  localPath: string | null;
   reviewStatus: SkillReviewStatus;
   reviewedBy: string | null;
   reviewedAt: string | null;
@@ -32,6 +34,7 @@ export interface CreateSkillInput {
   skillMdContent?: string;
   requiresBins?: string[];
   requiresEnv?: string[];
+  tags?: string[];
 }
 
 export interface UpdateSkillInput {
@@ -41,6 +44,7 @@ export interface UpdateSkillInput {
   skillMdContent?: string;
   requiresBins?: string[];
   requiresEnv?: string[];
+  tags?: string[];
 }
 
 export interface AgentSkillInstall {

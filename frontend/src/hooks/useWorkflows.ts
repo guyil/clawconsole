@@ -8,12 +8,6 @@ export const workflowKeys = {
   list: (params?: Record<string, string>) => [...workflowKeys.all, 'list', params] as const,
   detail: (id: string) => [...workflowKeys.all, 'detail', id] as const,
   versions: (id: string) => [...workflowKeys.all, 'versions', id] as const,
-  runs: (workflowId: string, params?: Record<string, string>) =>
-    [...workflowKeys.all, 'runs', workflowId, params] as const,
-  run: (runId: string) => [...workflowKeys.all, 'run', runId] as const,
-  runNodes: (runId: string) => [...workflowKeys.all, 'runNodes', runId] as const,
-  reviews: ['reviews'] as const,
-  pendingReviews: (userId?: string) => [...workflowKeys.reviews, 'pending', userId] as const,
 };
 
 export function useWorkflows(params?: { machineId?: string; agentId?: string; status?: string }) {
@@ -74,8 +68,8 @@ export function useValidateWorkflow() {
 export function useDeployWorkflow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, deployedBy }: { id: string; deployedBy: string }) =>
-      workflowsApi.deploy(id, deployedBy),
+    mutationFn: ({ id, machineId, scope, agentId }: { id: string; machineId: string; scope?: string; agentId?: string }) =>
+      workflowsApi.deploy(id, machineId, scope, agentId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workflowKeys.all });
       toast.success('工作流已部署');
@@ -99,75 +93,5 @@ export function useWorkflowVersions(workflowId: string) {
     queryKey: workflowKeys.versions(workflowId),
     queryFn: () => workflowsApi.listVersions(workflowId),
     enabled: !!workflowId,
-  });
-}
-
-// --- Runs ---
-
-export function useWorkflowRuns(workflowId: string, params?: { status?: string }) {
-  return useQuery({
-    queryKey: workflowKeys.runs(workflowId, params as Record<string, string>),
-    queryFn: () => workflowsApi.listRuns(workflowId, params),
-    enabled: !!workflowId,
-  });
-}
-
-export function useWorkflowRun(runId: string) {
-  return useQuery({
-    queryKey: workflowKeys.run(runId),
-    queryFn: () => workflowsApi.getRun(runId),
-    enabled: !!runId,
-  });
-}
-
-export function useWorkflowRunNodes(runId: string) {
-  return useQuery({
-    queryKey: workflowKeys.runNodes(runId),
-    queryFn: () => workflowsApi.getRunNodes(runId),
-    enabled: !!runId,
-  });
-}
-
-export function useAbortRun() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (runId: string) => workflowsApi.abortRun(runId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: workflowKeys.all });
-      toast.success('运行已中止');
-    },
-  });
-}
-
-// --- Reviews ---
-
-export function usePendingReviews(userId?: string) {
-  return useQuery({
-    queryKey: workflowKeys.pendingReviews(userId),
-    queryFn: () => workflowsApi.listPendingReviews(userId),
-  });
-}
-
-export function useSubmitReviewDecision() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      runId,
-      nodeId,
-      decision,
-      decidedBy,
-      comments,
-    }: {
-      runId: string;
-      nodeId: string;
-      decision: 'approved' | 'rejected';
-      decidedBy: string;
-      comments?: string;
-    }) => workflowsApi.submitDecision(runId, nodeId, decision, decidedBy, comments),
-    onSuccess: (_, { decision }) => {
-      qc.invalidateQueries({ queryKey: workflowKeys.reviews });
-      qc.invalidateQueries({ queryKey: workflowKeys.all });
-      toast.success(decision === 'approved' ? '已批准' : '已拒绝');
-    },
   });
 }

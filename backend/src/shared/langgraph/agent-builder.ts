@@ -4,6 +4,7 @@ import { ToolNode } from '@langchain/langgraph/prebuilt';
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import type { LangGraphAgentConfig, LangGraphToolDef, StreamEvent } from './types.js';
+import { getRunConfig, type RunConfig } from './tracing.js';
 import { createChildLogger } from '../logger.js';
 
 const log = createChildLogger('langgraph');
@@ -65,7 +66,8 @@ export function buildAgent(config: LangGraphAgentConfig) {
 
   const model = new ChatAnthropic({
     model: config.model,
-    maxTokens: 4096,
+    maxTokens: config.maxTokens ?? 4096,
+    temperature: config.temperature,
   }).bindTools(langChainTools);
 
   async function agentNode(state: typeof MessagesAnnotation.State) {
@@ -102,11 +104,15 @@ export function buildAgent(config: LangGraphAgentConfig) {
 /**
  * Runs a compiled agent and yields streaming events.
  * Each yielded event can be serialised as an SSE frame by the caller.
+ *
+ * When `tracingRunConfig` is provided (agentId + sessionId), run metadata
+ * is forwarded to LangSmith for per-run labeling and filtering.
  */
 export async function* streamAgent(
   compiledGraph: ReturnType<typeof buildAgent>,
   userMessage: string,
   existingMessages: Array<{ role: string; content: string }> = [],
+  tracingRunConfig?: { agentId: string; sessionId?: string },
 ): AsyncGenerator<StreamEvent> {
   try {
     const inputMessages = [
@@ -114,9 +120,17 @@ export async function* streamAgent(
       { role: 'user', content: userMessage },
     ];
 
+    const streamConfig: Record<string, unknown> = { streamMode: 'updates' };
+    if (tracingRunConfig) {
+      const rc: RunConfig = getRunConfig(tracingRunConfig.agentId, tracingRunConfig.sessionId);
+      streamConfig.runName = rc.runName;
+      streamConfig.tags = rc.tags;
+      streamConfig.metadata = rc.metadata;
+    }
+
     const stream = await compiledGraph.stream(
       { messages: inputMessages },
-      { streamMode: 'updates' },
+      streamConfig,
     );
 
     for await (const chunk of stream) {

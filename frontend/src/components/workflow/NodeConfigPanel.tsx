@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
-import { X, Puzzle, UserCheck, GitBranch, Plus, Trash2 } from 'lucide-react';
+import { X, Puzzle, ShieldCheck, GitBranch, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import type {
   WorkflowNodeDef,
   SkillNodeDef,
   ReviewNodeDef,
   ConditionNodeDef,
-  ReviewerRef,
   ConditionBranch,
 } from '../../types/workflow';
 
@@ -27,7 +26,8 @@ export function NodeConfigPanel({ node, onSave, onClose }: NodeConfigPanelProps)
     onSave(draft);
   }
 
-  const iconMap = { skill: Puzzle, review: UserCheck, condition: GitBranch };
+  const iconMap = { skill: Puzzle, review: ShieldCheck, condition: GitBranch };
+  const labelMap = { skill: 'Skill 节点', review: '审核节点', condition: '条件节点' };
   const Icon = iconMap[draft.type];
 
   return (
@@ -36,7 +36,7 @@ export function NodeConfigPanel({ node, onSave, onClose }: NodeConfigPanelProps)
       <div className="flex items-center justify-between px-5 py-4 border-b border-claw-border">
         <div className="flex items-center gap-2">
           <Icon size={16} className="text-claw-primary-light" />
-          <span className="text-sm font-semibold text-claw-text">节点配置</span>
+          <span className="text-sm font-semibold text-claw-text">{labelMap[draft.type]}</span>
         </div>
         <button onClick={onClose} className="text-claw-muted hover:text-claw-text transition-colors cursor-pointer">
           <X size={16} />
@@ -45,7 +45,6 @@ export function NodeConfigPanel({ node, onSave, onClose }: NodeConfigPanelProps)
 
       {/* Body */}
       <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
-        {/* Common: name */}
         <FieldGroup label="节点名称">
           <input
             className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
@@ -54,7 +53,7 @@ export function NodeConfigPanel({ node, onSave, onClose }: NodeConfigPanelProps)
           />
         </FieldGroup>
 
-        <FieldGroup label="节点 ID">
+        <FieldGroup label="步骤 ID">
           <input
             className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-muted font-mono"
             value={draft.id}
@@ -76,144 +75,91 @@ export function NodeConfigPanel({ node, onSave, onClose }: NodeConfigPanelProps)
   );
 }
 
-function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
       <label className="block text-xs text-claw-muted mb-1.5 font-medium">{label}</label>
+      {hint && <p className="text-[10px] text-claw-muted/70 mb-1.5">{hint}</p>}
       {children}
     </div>
   );
 }
 
+const inputClass =
+  'w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none';
+
 function SkillFields({ draft, onChange }: { draft: SkillNodeDef; onChange: (d: SkillNodeDef) => void }) {
   return (
     <>
-      <FieldGroup label="Skill 引用 (skillRef)">
+      <FieldGroup label="命令 (command)" hint="Lobster 步骤执行的命令，如 shell 命令或 Lobster 内置命令">
+        <textarea
+          className={`${inputClass} font-mono min-h-[60px]`}
+          value={draft.command}
+          onChange={(e) => onChange({ ...draft, command: e.target.value })}
+          placeholder="e.g. exec --json --shell 'python summarize.py'"
+        />
+      </FieldGroup>
+
+      <FieldGroup label="Skill 引用" hint="可选，关联 Skills 目录中的 Skill (用于自动填充命令)">
         <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-          value={draft.skillRef}
-          onChange={(e) => onChange({ ...draft, skillRef: e.target.value })}
+          className={`${inputClass} font-mono`}
+          value={draft.skillRef ?? ''}
+          onChange={(e) => onChange({ ...draft, skillRef: e.target.value || undefined })}
           placeholder="e.g. summarize-text"
         />
       </FieldGroup>
 
-      <FieldGroup label="输出变量名 (output)">
+      <FieldGroup label="标准输入 (stdin)" hint="从前置步骤引用输出，格式: $stepId.stdout">
         <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-          value={draft.output}
-          onChange={(e) => onChange({ ...draft, output: e.target.value })}
-          placeholder="e.g. summary_result"
+          className={`${inputClass} font-mono`}
+          value={draft.stdin ?? ''}
+          onChange={(e) => onChange({ ...draft, stdin: e.target.value || undefined })}
+          placeholder="e.g. $collect.stdout"
         />
       </FieldGroup>
 
       <FieldGroup label="超时 (timeout)">
         <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
+          className={inputClass}
           value={draft.timeout ?? ''}
           onChange={(e) => onChange({ ...draft, timeout: e.target.value || undefined })}
           placeholder="e.g. 5m, 1h"
         />
       </FieldGroup>
 
-      <FieldGroup label="错误处理 (onError)">
+      <FieldGroup label="错误处理">
         <select
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
+          className={inputClass}
           value={draft.onError ?? 'abort'}
           onChange={(e) => onChange({ ...draft, onError: e.target.value as SkillNodeDef['onError'] })}
         >
           <option value="abort">中止工作流</option>
-          <option value="skip">跳过此节点</option>
+          <option value="skip">跳过此步骤</option>
           <option value="fallback">执行 Fallback</option>
         </select>
-      </FieldGroup>
-
-      <FieldGroup label="输入参数 (input)">
-        <KeyValueEditor
-          entries={Object.entries(draft.input ?? {})}
-          onChange={(entries) =>
-            onChange({ ...draft, input: entries.length > 0 ? Object.fromEntries(entries) : undefined })
-          }
-        />
       </FieldGroup>
     </>
   );
 }
 
 function ReviewFields({ draft, onChange }: { draft: ReviewNodeDef; onChange: (d: ReviewNodeDef) => void }) {
-  function updateReviewer(idx: number, field: keyof ReviewerRef, value: string) {
-    const reviewers = [...draft.reviewers];
-    reviewers[idx] = { ...reviewers[idx], [field]: value || undefined };
-    onChange({ ...draft, reviewers });
-  }
-
-  function addReviewer() {
-    onChange({ ...draft, reviewers: [...draft.reviewers, { role: '' }] });
-  }
-
-  function removeReviewer(idx: number) {
-    const reviewers = draft.reviewers.filter((_, i) => i !== idx);
-    if (reviewers.length > 0) onChange({ ...draft, reviewers });
-  }
-
   return (
     <>
-      <FieldGroup label="审核策略 (policy)">
-        <select
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
-          value={draft.policy}
-          onChange={(e) => onChange({ ...draft, policy: e.target.value as 'any' | 'all' })}
-        >
-          <option value="any">任一审核人通过</option>
-          <option value="all">所有审核人通过</option>
-        </select>
-      </FieldGroup>
-
-      <FieldGroup label="审核人列表">
-        <div className="space-y-2">
-          {draft.reviewers.map((r, i) => (
-            <div key={i} className="flex gap-2 items-center">
-              <input
-                className="flex-1 bg-claw-input border border-claw-border rounded-lg px-3 py-1.5 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
-                placeholder="用户ID / 角色 / 群组"
-                value={r.userId ?? r.role ?? r.group ?? ''}
-                onChange={(e) => updateReviewer(i, r.userId ? 'userId' : r.group ? 'group' : 'role', e.target.value)}
-              />
-              <select
-                className="bg-claw-input border border-claw-border rounded-lg px-2 py-1.5 text-xs text-claw-muted"
-                value={r.userId ? 'userId' : r.group ? 'group' : 'role'}
-                onChange={(e) => {
-                  const val = r.userId ?? r.role ?? r.group ?? '';
-                  const reviewers = [...draft.reviewers];
-                  reviewers[i] = { [e.target.value]: val };
-                  onChange({ ...draft, reviewers });
-                }}
-              >
-                <option value="userId">用户</option>
-                <option value="role">角色</option>
-                <option value="group">群组</option>
-              </select>
-              <button onClick={() => removeReviewer(i)} className="text-claw-muted hover:text-claw-danger cursor-pointer">
-                <Trash2 size={13} />
-              </button>
-            </div>
-          ))}
-          <button
-            onClick={addReviewer}
-            className="flex items-center gap-1 text-xs text-claw-primary-light hover:text-claw-text cursor-pointer"
-          >
-            <Plus size={12} /> 添加审核人
-          </button>
-        </div>
-      </FieldGroup>
-
-      <FieldGroup label="超时 (timeout)">
-        <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none"
-          value={draft.timeout ?? ''}
-          onChange={(e) => onChange({ ...draft, timeout: e.target.value || undefined })}
-          placeholder="e.g. 24h"
+      <FieldGroup label="审批提示 (prompt)" hint="Lobster 暂停时显示给用户的提示文本">
+        <textarea
+          className={`${inputClass} min-h-[80px]`}
+          value={draft.prompt ?? ''}
+          onChange={(e) => onChange({ ...draft, prompt: e.target.value || undefined })}
+          placeholder="请确认是否继续执行后续步骤..."
         />
       </FieldGroup>
+
+      <div className="rounded-lg bg-claw-input/30 border border-claw-border/50 px-3 py-2.5">
+        <p className="text-[11px] text-claw-muted leading-relaxed">
+          审核由 Lobster 在远程节点上处理。当流水线执行到此步骤时，Lobster 会暂停并请求
+          Agent 进行审批确认，Agent 可通过 lobster resume 命令批准或拒绝。
+        </p>
+      </div>
     </>
   );
 }
@@ -236,12 +182,12 @@ function ConditionFields({ draft, onChange }: { draft: ConditionNodeDef; onChang
 
   return (
     <>
-      <FieldGroup label="判断表达式 (expression)">
+      <FieldGroup label="条件表达式" hint="Lobster 条件语法，引用前置步骤的输出字段，如 $stepId.field">
         <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none font-mono"
+          className={`${inputClass} font-mono`}
           value={draft.expression}
           onChange={(e) => onChange({ ...draft, expression: e.target.value })}
-          placeholder='e.g. {{ result.score }}'
+          placeholder="e.g. $approve.approved"
         />
       </FieldGroup>
 
@@ -251,14 +197,14 @@ function ConditionFields({ draft, onChange }: { draft: ConditionNodeDef; onChang
             <div key={i} className="flex gap-2 items-center">
               <input
                 className="flex-1 bg-claw-input border border-claw-border rounded-lg px-3 py-1.5 text-xs text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-                placeholder="条件 e.g. > 0.8"
+                placeholder="条件 e.g. == true"
                 value={b.condition}
                 onChange={(e) => updateBranch(i, 'condition', e.target.value)}
               />
-              <span className="text-claw-muted text-xs">→</span>
+              <span className="text-claw-muted text-xs">&#8594;</span>
               <input
                 className="w-28 bg-claw-input border border-claw-border rounded-lg px-3 py-1.5 text-xs text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-                placeholder="目标节点ID"
+                placeholder="目标步骤ID"
                 value={b.target}
                 onChange={(e) => updateBranch(i, 'target', e.target.value)}
               />
@@ -276,64 +222,14 @@ function ConditionFields({ draft, onChange }: { draft: ConditionNodeDef; onChang
         </div>
       </FieldGroup>
 
-      <FieldGroup label="默认分支 (default)">
+      <FieldGroup label="默认分支">
         <input
-          className="w-full bg-claw-input border border-claw-border rounded-lg px-3 py-2 text-sm text-claw-text focus:border-claw-primary focus:outline-none font-mono"
+          className={`${inputClass} font-mono`}
           value={draft.default ?? ''}
           onChange={(e) => onChange({ ...draft, default: e.target.value || undefined })}
-          placeholder="默认目标节点ID"
+          placeholder="默认目标步骤ID"
         />
       </FieldGroup>
     </>
-  );
-}
-
-function KeyValueEditor({
-  entries,
-  onChange,
-}: {
-  entries: [string, string][];
-  onChange: (entries: [string, string][]) => void;
-}) {
-  return (
-    <div className="space-y-2">
-      {entries.map(([key, value], i) => (
-        <div key={i} className="flex gap-2 items-center">
-          <input
-            className="w-28 bg-claw-input border border-claw-border rounded-lg px-2 py-1.5 text-xs text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-            value={key}
-            placeholder="参数名"
-            onChange={(e) => {
-              const next = [...entries] as [string, string][];
-              next[i] = [e.target.value, value];
-              onChange(next);
-            }}
-          />
-          <span className="text-claw-muted text-xs">=</span>
-          <input
-            className="flex-1 bg-claw-input border border-claw-border rounded-lg px-2 py-1.5 text-xs text-claw-text focus:border-claw-primary focus:outline-none font-mono"
-            value={value}
-            placeholder="{{ var }}"
-            onChange={(e) => {
-              const next = [...entries] as [string, string][];
-              next[i] = [key, e.target.value];
-              onChange(next);
-            }}
-          />
-          <button
-            onClick={() => onChange(entries.filter((_, j) => j !== i))}
-            className="text-claw-muted hover:text-claw-danger cursor-pointer"
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
-      ))}
-      <button
-        onClick={() => onChange([...entries, ['', '']])}
-        className="flex items-center gap-1 text-xs text-claw-primary-light hover:text-claw-text cursor-pointer"
-      >
-        <Plus size={12} /> 添加参数
-      </button>
-    </div>
   );
 }

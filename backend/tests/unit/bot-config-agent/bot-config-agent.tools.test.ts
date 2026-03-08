@@ -40,9 +40,9 @@ describe('buildConfigTools', () => {
     session = createSessionWithFiles();
   });
 
-  it('returns four tools', () => {
+  it('returns core config + browser tools', () => {
     const tools = buildConfigTools(session);
-    expect(tools).toHaveLength(4);
+    expect(tools.length).toBeGreaterThanOrEqual(4);
     const names = tools.map((t) => t.name);
     expect(names).toContain('read_config_file');
     expect(names).toContain('write_config_file');

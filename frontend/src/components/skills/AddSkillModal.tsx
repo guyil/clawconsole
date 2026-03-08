@@ -20,6 +20,7 @@ export function AddSkillModal({ open, onClose }: Props) {
     skillMdContent: '',
     requiresBins: '',
     requiresEnv: '',
+    tags: '',
   });
 
   const handleSubmit = () => {
@@ -32,13 +33,14 @@ export function AddSkillModal({ open, onClose }: Props) {
         source: form.source,
         version: form.version || undefined,
         skillMdContent: form.skillMdContent || undefined,
-        requiresBins: form.requiresBins ? form.requiresBins.split(',').map((s) => s.trim()) : undefined,
-        requiresEnv: form.requiresEnv ? form.requiresEnv.split(',').map((s) => s.trim()) : undefined,
+        requiresBins: form.requiresBins ? form.requiresBins.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+        requiresEnv: form.requiresEnv ? form.requiresEnv.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+        tags: form.tags ? form.tags.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : undefined,
       },
       {
         onSuccess: () => {
           onClose();
-          setForm({ skillKey: '', name: '', description: '', scope: 'global' as 'global' | 'agent', source: 'custom' as 'custom' | 'clawhub' | 'bundled', version: '1.0.0', skillMdContent: '', requiresBins: '', requiresEnv: '' });
+          setForm({ skillKey: '', name: '', description: '', scope: 'global' as 'global' | 'agent', source: 'custom' as 'custom' | 'clawhub' | 'bundled', version: '1.0.0', skillMdContent: '', requiresBins: '', requiresEnv: '', tags: '' });
         },
       },
     );
@@ -101,6 +103,7 @@ export function AddSkillModal({ open, onClose }: Props) {
               <option value="custom">自定义</option>
               <option value="clawhub">ClawHub</option>
               <option value="bundled">内置</option>
+              <option value="local">本地文件夹</option>
             </select>
           </div>
           <div>
@@ -140,6 +143,15 @@ export function AddSkillModal({ open, onClose }: Props) {
               onChange={(e) => setForm({ ...form, requiresEnv: e.target.value })}
             />
           </div>
+        </div>
+        <div>
+          <label className="block text-xs text-claw-muted mb-1">标签（逗号分隔）</label>
+          <input
+            className={inputClass}
+            placeholder="automation, daily, webhook"
+            value={form.tags}
+            onChange={(e) => setForm({ ...form, tags: e.target.value })}
+          />
         </div>
         <div className="flex justify-end gap-3 pt-2">
           <Button variant="secondary" onClick={onClose}>取消</Button>

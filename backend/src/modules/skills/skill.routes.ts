@@ -7,12 +7,14 @@ const CreateSkillSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
   scope: z.enum(['global', 'agent']).optional(),
-  source: z.enum(['clawhub', 'custom', 'bundled']).optional(),
+  source: z.enum(['clawhub', 'custom', 'bundled', 'local']).optional(),
   version: z.string().max(50).optional(),
   skillMdContent: z.string().optional(),
   auxiliaryFiles: z.record(z.string()).optional(),
   requiresBins: z.array(z.string()).optional(),
   requiresEnv: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  localPath: z.string().optional(),
 });
 
 const UpdateSkillSchema = z.object({
@@ -23,6 +25,7 @@ const UpdateSkillSchema = z.object({
   auxiliaryFiles: z.record(z.string()).optional(),
   requiresBins: z.array(z.string()).optional(),
   requiresEnv: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
 });
 
 const ReviewSkillSchema = z.object({
@@ -45,6 +48,10 @@ const ImportUrlSchema = z.object({
   url: z.string().url(),
 });
 
+const ImportLocalSchema = z.object({
+  folderPath: z.string().min(1),
+});
+
 const DeploySkillSchema = z.object({
   scope: z.enum(['global', 'agent']).default('global'),
   agentId: z.string().uuid().optional(),
@@ -59,8 +66,14 @@ export function registerSkillRoutes(fastify: FastifyInstance, skillService: Skil
       source: query.source as any,
       scope: query.scope as any,
       reviewStatus: query.reviewStatus as any,
+      tag: query.tag || undefined,
     });
     return { data: skills, total: skills.length };
+  });
+
+  fastify.get('/api/skills/tags', async () => {
+    const tags = await skillService.getAllTags();
+    return { data: tags };
   });
 
   fastify.get('/api/skills/:skillId', async (request) => {
@@ -125,6 +138,21 @@ export function registerSkillRoutes(fastify: FastifyInstance, skillService: Skil
     const body = ImportUrlSchema.parse(request.body);
     const skill = await skillService.importSkillFromUrl(body.url);
     return reply.status(201).send(skill);
+  });
+
+  // --- Import from local folder ---
+
+  fastify.post('/api/skills/import-local', async (request, reply) => {
+    const body = ImportLocalSchema.parse(request.body);
+    const skill = await skillService.importSkillFromLocal(body.folderPath);
+    return reply.status(201).send(skill);
+  });
+
+  // --- Sync local skill from disk ---
+
+  fastify.post('/api/skills/:skillId/sync-local', async (request) => {
+    const { skillId } = request.params as { skillId: string };
+    return skillService.syncLocalSkill(skillId);
   });
 
   // --- Import / Deploy ---

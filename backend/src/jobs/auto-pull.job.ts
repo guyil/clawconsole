@@ -17,9 +17,18 @@ export function createAutoPullHandler(
     for (const machine of machines) {
       try {
         const connInfo = machineService.toConnectionInfo(machine);
-        await syncEngine.collectManifest(connInfo, machine.openclawHome);
+        const result = await syncEngine.executePull(
+          machine.id,
+          connInfo,
+          machine.openclawHome,
+          'auto-pull',
+        );
+        log.info(
+          { machineId: machine.id, synced: result.syncedFiles, failed: result.failedFiles },
+          'Auto-pull completed',
+        );
       } catch (err) {
-        log.error({ machineId: machine.id, err }, 'Auto-pull manifest collection failed');
+        log.error({ machineId: machine.id, err }, 'Auto-pull failed');
       }
     }
   };

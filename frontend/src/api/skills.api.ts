@@ -9,8 +9,11 @@ import type {
 } from '../types/skill';
 
 export const skillsApi = {
-  list: (params?: { source?: string; scope?: string; reviewStatus?: string }) =>
+  list: (params?: { source?: string; scope?: string; reviewStatus?: string; tag?: string }) =>
     api.get<PaginatedResponse<SkillCatalogEntry>>('/skills', { params }).then((r) => r.data),
+
+  listTags: () =>
+    api.get<{ data: string[] }>('/skills/tags').then((r) => r.data),
 
   get: (id: string) =>
     api.get<SkillCatalogEntry>(`/skills/${id}`).then((r) => r.data),
@@ -41,6 +44,12 @@ export const skillsApi = {
   importFromUrl: (url: string) =>
     api.post<SkillCatalogEntry>('/skills/import-url', { url }).then((r) => r.data),
 
+  importFromLocal: (folderPath: string) =>
+    api.post<SkillCatalogEntry>('/skills/import-local', { folderPath }).then((r) => r.data),
+
+  syncLocal: (skillId: string) =>
+    api.post<SkillCatalogEntry>(`/skills/${skillId}/sync-local`).then((r) => r.data),
+
   importFromMachine: (machineId: string, skillKey: string, scope?: string) =>
     api
       .post(`/machines/${machineId}/skills/import`, { skillKey, scope })
@@ -50,4 +59,13 @@ export const skillsApi = {
     api
       .post(`/skills/${skillId}/deploy/${machineId}`, { scope, agentId })
       .then((r) => r.data),
+
+  removeDiscoveredSkill: (agentId: string, skillKey: string) =>
+    api.delete(`/agents/${agentId}/discovered-skills/${encodeURIComponent(skillKey)}`).then((r) => r.data),
+
+  removeGlobalSkill: (agentId: string, skillKey: string) =>
+    api.delete(`/agents/${agentId}/global-skills/${encodeURIComponent(skillKey)}`).then((r) => r.data),
+
+  rediscoverSkills: (agentId: string) =>
+    api.post(`/agents/${agentId}/rediscover-skills`).then((r) => r.data),
 };

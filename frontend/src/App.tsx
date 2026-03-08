@@ -17,9 +17,6 @@ import { SessionsPage } from './pages/SessionsPage';
 import { LogsPage } from './pages/LogsPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
-import { WorkflowRunsPage } from './pages/WorkflowRunsPage';
-import { WorkflowRunDetailPage } from './pages/WorkflowRunDetailPage';
-import { ReviewInboxPage } from './pages/ReviewInboxPage';
 import { useWebSocketStore } from './stores/websocket.store';
 import { useWebSocketQuerySync } from './hooks/useWebSocketQuerySync';
 
@@ -51,9 +48,6 @@ export default function App() {
         <Route path="monitoring/logs" element={<LogsPage />} />
         <Route path="workflows" element={<WorkflowsPage />} />
         <Route path="workflows/:workflowId" element={<WorkflowEditorPage />} />
-        <Route path="workflows/runs" element={<WorkflowRunsPage />} />
-        <Route path="workflows/runs/:runId" element={<WorkflowRunDetailPage />} />
-        <Route path="reviews" element={<ReviewInboxPage />} />
       </Route>
     </Routes>
   );

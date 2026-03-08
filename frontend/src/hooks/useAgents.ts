@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { agentsApi } from '../api/agents.api';
-import type { CreateAgentInput, UpdateAgentInput } from '../types/agent';
+import type { CreateAgentInput, UpdateAgentInput, ProvisionInput } from '../types/agent';
 import toast from 'react-hot-toast';
 
 export const agentKeys = {
@@ -9,6 +9,7 @@ export const agentKeys = {
   byMachine: (machineId: string) => [...agentKeys.all, 'machine', machineId] as const,
   detail: (agentId: string) => [...agentKeys.all, 'detail', agentId] as const,
   configFiles: (agentId: string) => [...agentKeys.all, 'config-files', agentId] as const,
+  memoryFiles: (agentId: string) => [...agentKeys.all, 'memory-files', agentId] as const,
 };
 
 export function useAllAgents() {
@@ -42,6 +43,14 @@ export function useAgentConfigFiles(agentId: string) {
   });
 }
 
+export function useAgentMemoryFiles(agentId: string) {
+  return useQuery({
+    queryKey: agentKeys.memoryFiles(agentId),
+    queryFn: () => agentsApi.getMemoryFiles(agentId),
+    enabled: !!agentId,
+  });
+}
+
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({
@@ -49,7 +58,9 @@ export function useCreateAgent() {
       agentsApi.create(machineId, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentKeys.all });
-      toast.success('Agent 已创建');
+    },
+    onError: (err: Error) => {
+      toast.error(`创建失败: ${err.message}`);
     },
   });
 }
@@ -62,6 +73,21 @@ export function useUpdateAgent() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentKeys.all });
       toast.success('Agent 已更新');
+    },
+  });
+}
+
+export function useProvisionAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, channels }: { agentId: string; channels?: ProvisionInput['channels'] }) =>
+      agentsApi.provision(agentId, { channels }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+      toast.success('Bot 部署成功');
+    },
+    onError: (err: Error) => {
+      toast.error(`部署失败: ${err.message}`);
     },
   });
 }

@@ -31,13 +31,27 @@ export class SkillRepository {
     source?: SkillSource;
     scope?: SkillScope;
     reviewStatus?: SkillReviewStatus;
+    tag?: string;
   }): Promise<SkillCatalogEntry[]> {
     let query = this.db('skills_catalog').select('*');
     if (filters?.source) query = query.where('source', filters.source);
     if (filters?.scope) query = query.where('scope', filters.scope);
     if (filters?.reviewStatus) query = query.where('review_status', filters.reviewStatus);
+    if (filters?.tag) query = query.whereRaw('JSON_CONTAINS(tags, ?)', [JSON.stringify(filters.tag)]);
     const rows = await query.orderBy('name', 'asc');
     return rows.map(this.toCatalogEntry);
+  }
+
+  async findAllTags(): Promise<string[]> {
+    const rows = await this.db('skills_catalog')
+      .whereNotNull('tags')
+      .select('tags');
+    const tagSet = new Set<string>();
+    for (const row of rows) {
+      const tags = safeJsonParse<string[]>(row.tags);
+      if (tags) tags.forEach((t) => tagSet.add(t));
+    }
+    return Array.from(tagSet).sort();
   }
 
   async findById(id: string): Promise<SkillCatalogEntry | null> {
@@ -67,6 +81,8 @@ export class SkillRepository {
       auxiliary_files: input.auxiliaryFiles ? JSON.stringify(input.auxiliaryFiles) : null,
       requires_bins: input.requiresBins ? JSON.stringify(input.requiresBins) : null,
       requires_env: input.requiresEnv ? JSON.stringify(input.requiresEnv) : null,
+      tags: input.tags ? JSON.stringify(input.tags) : null,
+      local_path: input.localPath ?? null,
       review_status: 'pending',
       created_at: now,
       updated_at: now,
@@ -84,6 +100,7 @@ export class SkillRepository {
     if (input.auxiliaryFiles !== undefined) updates.auxiliary_files = JSON.stringify(input.auxiliaryFiles);
     if (input.requiresBins !== undefined) updates.requires_bins = JSON.stringify(input.requiresBins);
     if (input.requiresEnv !== undefined) updates.requires_env = JSON.stringify(input.requiresEnv);
+    if (input.tags !== undefined) updates.tags = JSON.stringify(input.tags);
     if (input.reviewStatus !== undefined) {
       updates.review_status = input.reviewStatus;
       updates.reviewed_at = new Date();
@@ -179,6 +196,8 @@ export class SkillRepository {
       auxiliaryFiles: safeJsonParse<Record<string, string>>(row.auxiliary_files),
       requiresBins: safeJsonParse<string[]>(row.requires_bins),
       requiresEnv: safeJsonParse<string[]>(row.requires_env),
+      tags: safeJsonParse<string[]>(row.tags),
+      localPath: (row.local_path as string) ?? null,
       reviewStatus: (row.skill_review_status ?? row.review_status) as SkillReviewStatus,
       reviewedBy: row.reviewed_by as string | null,
       reviewedAt: row.reviewed_at ? new Date(row.reviewed_at as string) : null,

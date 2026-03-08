@@ -1,9 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
-import { buildAgent, streamAgent } from '../../shared/langgraph/index.js';
+import { buildAgent, streamAgent, closeBrowser, getAgentConfig } from '../../shared/langgraph/index.js';
 import type { StreamEvent } from '../../shared/langgraph/types.js';
 import { createChildLogger } from '../../shared/logger.js';
 import { NotFoundError, AppError } from '../../shared/errors.js';
-import { config } from '../../config/index.js';
 import { buildConfigTools } from './bot-config-agent.tools.js';
 import type {
   ConfigChatSession,
@@ -19,30 +18,7 @@ import type { FileTransfer } from '../../transport/file-transfer.js';
 
 const log = createChildLogger('bot-config-agent');
 
-const SYSTEM_PROMPT = `You are an AI assistant that helps configure OpenClaw bots.
-You can read and modify the bot's configuration files through the tools provided.
-
-## Available Configuration Files
-
-- **SOUL.md** — The bot's core personality, values, and behavioral guidelines. This is the most important file that defines who the bot is.
-- **IDENTITY.md** — The bot's name, emoji, avatar, visual theme, and identity metadata.
-- **USER.md** — Context about the bot's user/owner (their preferences, communication style, etc.).
-- **AGENTS.md** — Multi-agent collaboration rules and workspace instructions.
-- **TOOLS.md** — Tool usage notes, device nicknames, and tool-specific instructions.
-- **BOOTSTRAP.md** — Startup instructions that run when the bot first initializes.
-- **HEARTBEAT.md** — Periodic checklist items the bot should review on heartbeat events.
-- **README.md** — General overview and documentation for the bot workspace.
-
-## Guidelines
-
-1. Always **read** a file before modifying it to understand its current state.
-2. When writing files, preserve the existing markdown structure and only change what the user requested.
-3. Explain what you changed and why after each modification.
-4. Changes are saved as local drafts — remind the user to click "Sync" to push changes to the remote machine.
-5. If the user's request is vague, ask clarifying questions before making changes.
-6. Use natural, conversational language in your responses.
-7. When suggesting personality traits (SOUL.md), be creative but respect the user's intent.
-8. For IDENTITY.md, suggest appropriate emojis and names that match the personality.`;
+const agentCfg = getAgentConfig('bot-config');
 
 /** Max idle time before a session is cleaned up (30 minutes) */
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -172,9 +148,11 @@ export class BotConfigAgentService {
 
     const tools = buildConfigTools(session);
     const compiledGraph = buildAgent({
-      model: config.playground.defaultModel,
-      systemPrompt: SYSTEM_PROMPT,
+      model: agentCfg.model,
+      systemPrompt: agentCfg.systemPrompt,
       tools,
+      maxTokens: agentCfg.maxTokens,
+      temperature: agentCfg.temperature,
     });
 
     const existingMessages = session.messages.slice(0, -1).map((m) => ({
@@ -183,7 +161,10 @@ export class BotConfigAgentService {
     }));
 
     let assistantContent = '';
-    for await (const event of streamAgent(compiledGraph, userMessage, existingMessages)) {
+    for await (const event of streamAgent(compiledGraph, userMessage, existingMessages, {
+      agentId: 'bot-config',
+      sessionId: session.id,
+    })) {
       yield event;
       if (event.type === 'text-delta') {
         assistantContent = event.data.content as string;
@@ -295,6 +276,7 @@ export class BotConfigAgentService {
     const session = this.findSessionByAgent(agentId);
     if (!session) return false;
     this.sessions.delete(session.id);
+    closeBrowser(`bot-config-${session.id}`).catch(() => {});
     log.info({ sessionId: session.id, agentId }, 'Config chat session reset');
     return true;
   }
@@ -335,6 +317,7 @@ export class BotConfigAgentService {
       const elapsed = Date.now() - session.lastActivityAt.getTime();
       if (elapsed >= SESSION_TTL_MS) {
         this.sessions.delete(sessionId);
+        closeBrowser(`bot-config-${sessionId}`).catch(() => {});
         log.info({ sessionId }, 'Config chat session expired');
       } else {
         this.scheduleCleanup(sessionId);

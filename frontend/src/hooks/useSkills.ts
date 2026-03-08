@@ -8,12 +8,20 @@ export const skillKeys = {
   list: (params?: Record<string, string>) => [...skillKeys.all, 'list', params] as const,
   detail: (id: string) => [...skillKeys.all, 'detail', id] as const,
   agentSkills: (agentId: string) => [...skillKeys.all, 'agent', agentId] as const,
+  tags: () => [...skillKeys.all, 'tags'] as const,
 };
 
-export function useSkills(params?: { source?: string; scope?: string; reviewStatus?: string }) {
+export function useSkills(params?: { source?: string; scope?: string; reviewStatus?: string; tag?: string }) {
   return useQuery({
     queryKey: skillKeys.list(params as Record<string, string>),
     queryFn: () => skillsApi.list(params),
+  });
+}
+
+export function useSkillTags() {
+  return useQuery({
+    queryKey: skillKeys.tags(),
+    queryFn: () => skillsApi.listTags(),
   });
 }
 
@@ -117,6 +125,34 @@ export function useImportSkillFromUrl() {
   });
 }
 
+export function useImportSkillFromLocal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (folderPath: string) => skillsApi.importFromLocal(folderPath),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skillKeys.all });
+      toast.success('Skill 已从本地文件夹导入');
+    },
+    onError: (err: Error) => {
+      toast.error(`导入失败: ${err.message}`);
+    },
+  });
+}
+
+export function useSyncLocalSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (skillId: string) => skillsApi.syncLocal(skillId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skillKeys.all });
+      toast.success('Skill 已从本地文件夹同步');
+    },
+    onError: (err: Error) => {
+      toast.error(`同步失败: ${err.message}`);
+    },
+  });
+}
+
 export function useImportSkill() {
   const qc = useQueryClient();
   return useMutation({
@@ -125,6 +161,53 @@ export function useImportSkill() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skillKeys.all });
       toast.success('Skill 已导入');
+    },
+  });
+}
+
+export function useRemoveDiscoveredSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, skillKey }: { agentId: string; skillKey: string }) =>
+      skillsApi.removeDiscoveredSkill(agentId, skillKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skillKeys.all });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('专属 Skill 已移除');
+    },
+    onError: (err: Error) => {
+      toast.error(`移除失败: ${err.message}`);
+    },
+  });
+}
+
+export function useRemoveGlobalSkill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, skillKey }: { agentId: string; skillKey: string }) =>
+      skillsApi.removeGlobalSkill(agentId, skillKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skillKeys.all });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('共享 Skill 已移除');
+    },
+    onError: (err: Error) => {
+      toast.error(`移除失败: ${err.message}`);
+    },
+  });
+}
+
+export function useRediscoverSkills() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (agentId: string) => skillsApi.rediscoverSkills(agentId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: skillKeys.all });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      toast.success('Skills 发现已刷新');
+    },
+    onError: (err: Error) => {
+      toast.error(`刷新失败: ${err.message}`);
     },
   });
 }

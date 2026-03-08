@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createChildLogger } from '../logger.js';
 import type { LangGraphToolDef } from './types.js';
+import { createBrowserTools, BROWSER_TOOL_NAMES } from './browser-tools.js';
+import { createWebFetchTool } from '../platform-skills/tools/web-fetch.tool.js';
 
 const log = createChildLogger('tool-registry');
 
@@ -108,69 +110,6 @@ export function createSearchTool(sandboxDir: string): LangGraphToolDef {
   };
 }
 
-async function tryFetch(url: string): Promise<string> {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(15_000),
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; ClawConsole-Playground/1.0)',
-      Accept: 'text/html,text/plain,application/json,*/*',
-    },
-    redirect: 'follow',
-  });
-  if (!response.ok) {
-    return `HTTP ${response.status}: ${response.statusText}`;
-  }
-  const text = await response.text();
-  return text.slice(0, 10_000);
-}
-
-export function createWebFetchTool(): LangGraphToolDef {
-  return {
-    name: 'web_fetch',
-    description: 'Fetch the content of a URL and return it as text. Supports HTTP and HTTPS URLs. If no protocol is given, https:// is tried first with http:// fallback.',
-    schema: {
-      url: { type: 'string', description: 'The URL to fetch (e.g. "https://example.com/api" or "http://wttr.in/London")' },
-    },
-    handler: async (args) => {
-      let url = (args.url as string)?.trim();
-      if (!url) return 'Error: url parameter is required';
-
-      // Auto-add protocol if missing
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        url = `https://${url}`;
-      }
-
-      try {
-        return await tryFetch(url);
-      } catch (firstErr) {
-        // If HTTPS failed with timeout/connection error, retry with HTTP
-        if (url.startsWith('https://')) {
-          const httpUrl = url.replace('https://', 'http://');
-          log.info({ httpsUrl: url, httpUrl }, 'HTTPS failed, retrying with HTTP');
-          try {
-            return await tryFetch(httpUrl);
-          } catch {
-            // fall through to report the original HTTPS error
-          }
-        }
-
-        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-        if (msg.includes('abort') || msg.includes('timeout')) {
-          return `Error: Request to ${url} timed out. The server may be unreachable or slow.`;
-        }
-        if (msg.includes('ENOTFOUND') || msg.includes('getaddrinfo')) {
-          return `Error: DNS resolution failed for ${url}. The hostname could not be resolved.`;
-        }
-        if (msg.includes('ECONNREFUSED')) {
-          return `Error: Connection refused by ${url}. The server is not accepting connections.`;
-        }
-        log.warn({ url, error: msg }, 'web_fetch failed');
-        return `Error fetching ${url}: ${msg}`;
-      }
-    },
-  };
-}
-
 /** All available sandbox tool factories, keyed by tool name. */
 const TOOL_FACTORIES: Record<string, (sandboxDir: string) => LangGraphToolDef> = {
   read_file: createReadFileTool,
@@ -182,19 +121,42 @@ const TOOL_FACTORIES: Record<string, (sandboxDir: string) => LangGraphToolDef> =
 
 /**
  * Builds the set of tools for a playground session based on the allowed list.
- * If allowedTools is empty, all tools are enabled.
+ * If allowedTools is empty, all tools (including browser tools) are enabled.
+ * Pass a sessionId to enable browser tools with per-session lifecycle.
  */
-export function buildToolSet(sandboxDir: string, allowedTools: string[]): LangGraphToolDef[] {
+export function buildToolSet(
+  sandboxDir: string,
+  allowedTools: string[],
+  sessionId?: string,
+): LangGraphToolDef[] {
+  const allFactoryNames = Object.keys(TOOL_FACTORIES);
+  const allNames = [...allFactoryNames, ...BROWSER_TOOL_NAMES];
+
   const toolNames = allowedTools.length > 0
     ? allowedTools
-    : Object.keys(TOOL_FACTORIES);
+    : allNames;
 
   const tools: LangGraphToolDef[] = [];
+
+  // Browser tools (need sessionId for lifecycle management)
+  const wantsBrowser = toolNames.some((n) => BROWSER_TOOL_NAMES.includes(n));
+  const browserTools = wantsBrowser && sessionId
+    ? createBrowserTools(sessionId)
+    : [];
+  const browserMap = new Map(browserTools.map((t) => [t.name, t]));
+
   for (const name of toolNames) {
+    // Check browser tools first
+    const bt = browserMap.get(name);
+    if (bt) {
+      tools.push(bt);
+      continue;
+    }
+    // Then sandbox tools
     const factory = TOOL_FACTORIES[name];
     if (factory) {
       tools.push(factory(sandboxDir));
-    } else {
+    } else if (!BROWSER_TOOL_NAMES.includes(name)) {
       log.warn({ tool: name }, 'Unknown tool requested, skipping');
     }
   }
@@ -202,5 +164,7 @@ export function buildToolSet(sandboxDir: string, allowedTools: string[]): LangGr
 }
 
 export function getAvailableToolNames(): string[] {
-  return Object.keys(TOOL_FACTORIES);
+  return [...Object.keys(TOOL_FACTORIES), ...BROWSER_TOOL_NAMES];
 }
+
+export { closeBrowser } from './browser-tools.js';

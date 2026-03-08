@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMonitoringSessions, useSessionTranscript, useTriggerTranscriptPull } from '../hooks/useMonitoring';
+import { useState, useEffect, useRef } from 'react';
+import { useMonitoringSessions, useSessionTranscript, useTriggerTranscriptPull, useTriggerSessionSync } from '../hooks/useMonitoring';
 import { useMachines } from '../hooks/useMachines';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -61,14 +61,28 @@ function TranscriptPanel({
   session: SessionSnapshot;
   onClose: () => void;
 }) {
-  const { data, isLoading } = useSessionTranscript(
+  const { data, isLoading, isFetched } = useSessionTranscript(
     session.machineId,
     session.sessionId ?? '',
     session.agentId,
   );
   const pullMutation = useTriggerTranscriptPull();
+  const autoPulledRef = useRef(false);
 
   const messages = data?.data ?? [];
+
+  // Auto-pull transcript when panel opens and no cached messages exist
+  useEffect(() => {
+    if (!isFetched || autoPulledRef.current || pullMutation.isPending) return;
+    if (messages.length === 0) {
+      autoPulledRef.current = true;
+      pullMutation.mutate({
+        machineId: session.machineId,
+        sessionKey: session.sessionKey,
+        agentId: session.agentId,
+      });
+    }
+  }, [isFetched, messages.length, session.machineId, session.sessionKey, session.agentId, pullMutation]);
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex justify-end">
@@ -126,11 +140,11 @@ function TranscriptPanel({
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {isLoading ? (
+          {isLoading || pullMutation.isPending ? (
             <PageSpinner />
           ) : messages.length === 0 ? (
             <div className="text-center text-claw-muted text-sm py-8">
-              暂无消息记录，点击刷新拉取
+              暂无消息记录
             </div>
           ) : (
             messages.map((msg: SessionMessage) => (
@@ -190,6 +204,8 @@ export function SessionsPage() {
 
   const { data: machinesData } = useMachines();
   const machines = machinesData?.data ?? [];
+  const syncMutation = useTriggerSessionSync();
+  const autoSyncedRef = useRef(false);
 
   const { data, isLoading } = useMonitoringSessions({
     machineId: machineId || undefined,
@@ -200,6 +216,15 @@ export function SessionsPage() {
 
   const sessions = data?.data ?? [];
 
+  // Auto-sync sessions from all machines on page load
+  useEffect(() => {
+    if (autoSyncedRef.current || machines.length === 0 || syncMutation.isPending) return;
+    autoSyncedRef.current = true;
+    for (const machine of machines) {
+      syncMutation.mutate(machine.id);
+    }
+  }, [machines, syncMutation]);
+
   // Collect unique agentIds for filter dropdown
   const uniqueAgents = [...new Set(sessions.map((s) => s.agentId))].sort();
 
@@ -207,7 +232,15 @@ export function SessionsPage() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-lg font-bold text-claw-text">会话监控</h1>
-        <div className="text-sm text-claw-muted">{data?.total ?? 0} 个会话</div>
+        <div className="flex items-center gap-3">
+          {syncMutation.isPending && (
+            <span className="flex items-center gap-1.5 text-xs text-claw-primary-light">
+              <RefreshCw size={12} className="animate-spin" />
+              同步中…
+            </span>
+          )}
+          <div className="text-sm text-claw-muted">{data?.total ?? 0} 个会话</div>
+        </div>
       </div>
 
       {/* Filters */}
@@ -253,7 +286,7 @@ export function SessionsPage() {
       {isLoading ? (
         <PageSpinner />
       ) : sessions.length === 0 ? (
-        <EmptyState title="暂无会话数据" description="请先同步会话数据，或确认节点已连接" />
+        <EmptyState title="暂无会话数据" description={syncMutation.isPending ? '正在从节点同步会话数据…' : '请确认节点已连接并有会话记录'} />
       ) : (
         <div className="space-y-2">
           {sessions.map((session) => (

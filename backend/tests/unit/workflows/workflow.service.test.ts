@@ -1,12 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WorkflowService } from '../../../src/modules/workflows/workflow.service.js';
 import { NotFoundError, ValidationError } from '../../../src/shared/errors.js';
-import type {
-  Workflow,
-  WorkflowRun,
-  WorkflowReview,
-  WorkflowRunNode,
-} from '../../../src/modules/workflows/workflow.types.js';
+import type { Workflow } from '../../../src/modules/workflows/workflow.types.js';
 
 vi.mock('../../../src/shared/logger.js', () => ({
   createChildLogger: () => ({
@@ -22,6 +17,7 @@ function makeWorkflow(overrides: Partial<Workflow> = {}): Workflow {
     id: 'wf-1',
     name: 'content-pipeline',
     description: 'Test workflow',
+    workflowKey: 'content-pipeline',
     machineId: 'machine-1',
     agentId: null,
     status: 'draft',
@@ -32,16 +28,13 @@ function makeWorkflow(overrides: Partial<Workflow> = {}): Workflow {
         id: 'draft',
         type: 'skill',
         name: 'Generate Draft',
-        skillRef: 'content-writer',
-        output: 'draft_result',
+        command: 'exec --json --shell "python draft.py"',
       },
       {
         id: 'review',
         type: 'review',
-        name: 'Manager Review',
-        reviewers: [{ role: 'manager' }],
-        policy: 'any',
-        timeout: '2h',
+        name: 'Manager Approval',
+        prompt: 'Please review the draft',
       },
     ],
     edges: [{ source: 'draft', target: 'review' }],
@@ -56,48 +49,12 @@ function makeWorkflow(overrides: Partial<Workflow> = {}): Workflow {
   };
 }
 
-function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
-  return {
-    id: 'run-1',
-    workflowId: 'wf-1',
-    runId: 'lobster-run-abc',
-    machineId: 'machine-1',
-    status: 'running',
-    triggerInfo: null,
-    currentNodes: ['draft'],
-    variables: null,
-    startedAt: new Date('2026-03-01T10:00:00Z'),
-    completedAt: null,
-    errorMessage: null,
-    syncedAt: new Date('2026-03-01T10:01:00Z'),
-    ...overrides,
-  };
-}
-
-function makeReview(overrides: Partial<WorkflowReview> = {}): WorkflowReview {
-  return {
-    id: 'rev-1',
-    runId: 'run-1',
-    nodeId: 'review',
-    status: 'pending',
-    reviewers: [{ role: 'manager' }],
-    policy: 'any',
-    payload: { title: 'Review this content' },
-    timeoutAt: new Date('2026-03-01T12:00:00Z'),
-    decision: null,
-    decidedBy: null,
-    comments: null,
-    decidedAt: null,
-    createdAt: new Date('2026-03-01T10:00:00Z'),
-    ...overrides,
-  };
-}
-
 function createMockRepo() {
   return {
     findAll: vi.fn().mockResolvedValue([]),
     findById: vi.fn().mockResolvedValue(null),
     findByName: vi.fn().mockResolvedValue(null),
+    findByKey: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue(makeWorkflow()),
     update: vi.fn().mockResolvedValue(makeWorkflow()),
     delete: vi.fn().mockResolvedValue(true),
@@ -112,20 +69,6 @@ function createMockRepo() {
       createdBy: 'admin',
       createdAt: new Date(),
     }),
-    findRuns: vi.fn().mockResolvedValue([]),
-    findRunById: vi.fn().mockResolvedValue(null),
-    findRunByRunId: vi.fn().mockResolvedValue(null),
-    upsertRun: vi.fn().mockResolvedValue(makeRun()),
-    updateRunStatus: vi.fn().mockResolvedValue(makeRun({ status: 'aborted' })),
-    findRunNodes: vi.fn().mockResolvedValue([]),
-    upsertRunNode: vi.fn().mockResolvedValue(null),
-    findPendingReviews: vi.fn().mockResolvedValue([]),
-    findReviewByRunAndNode: vi.fn().mockResolvedValue(null),
-    findReviewById: vi.fn().mockResolvedValue(null),
-    createReview: vi.fn().mockResolvedValue(makeReview()),
-    updateReviewDecision: vi.fn().mockResolvedValue(makeReview({ status: 'approved', decision: 'approved' })),
-    updateReviewStatus: vi.fn().mockResolvedValue(makeReview({ status: 'expired' })),
-    findExpiredReviews: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -141,18 +84,61 @@ function createMockSkillRepo() {
     ]),
     findById: vi.fn().mockResolvedValue(null),
     findByKey: vi.fn().mockResolvedValue(null),
-  } as any;
+  } as ReturnType<typeof createMockSkillRepo>;
+}
+
+function createMockMachineService() {
+  return {
+    getMachine: vi.fn().mockResolvedValue({
+      id: 'machine-1',
+      name: 'Test Machine',
+      openclawHome: '/home/user/.openclaw',
+    }),
+    toConnectionInfo: vi.fn().mockReturnValue({
+      host: 'test-host',
+      port: 22,
+      username: 'user',
+    }),
+  } as ReturnType<typeof createMockMachineService>;
+}
+
+function createMockAgentRepo() {
+  return {
+    findById: vi.fn().mockResolvedValue({
+      id: 'agent-1',
+      workspacePath: 'workspace',
+    }),
+  } as ReturnType<typeof createMockAgentRepo>;
+}
+
+function createMockFileTransfer() {
+  return {
+    ensureDirectory: vi.fn().mockResolvedValue(undefined),
+    uploadFile: vi.fn().mockResolvedValue(undefined),
+  } as ReturnType<typeof createMockFileTransfer>;
 }
 
 describe('WorkflowService', () => {
   let service: WorkflowService;
   let repo: ReturnType<typeof createMockRepo>;
   let skillRepo: ReturnType<typeof createMockSkillRepo>;
+  let machineService: ReturnType<typeof createMockMachineService>;
+  let agentRepo: ReturnType<typeof createMockAgentRepo>;
+  let fileTransfer: ReturnType<typeof createMockFileTransfer>;
 
   beforeEach(() => {
     repo = createMockRepo();
     skillRepo = createMockSkillRepo();
-    service = new WorkflowService(repo as any, skillRepo);
+    machineService = createMockMachineService();
+    agentRepo = createMockAgentRepo();
+    fileTransfer = createMockFileTransfer();
+    service = new WorkflowService(
+      repo as any,
+      skillRepo as any,
+      machineService as any,
+      agentRepo as any,
+      fileTransfer as any,
+    );
   });
 
   // --- Workflow CRUD ---
@@ -193,8 +179,7 @@ describe('WorkflowService', () => {
           id: 'draft',
           type: 'skill',
           name: 'Draft',
-          skillRef: 'content-writer',
-          output: 'draft_result',
+          command: 'exec draft',
         }],
         edges: [],
         createdBy: 'admin',
@@ -209,7 +194,7 @@ describe('WorkflowService', () => {
           name: '',
           machineId: 'machine-1',
           triggerConfig: { type: 'manual' },
-          nodes: [{ id: 'a', type: 'skill', name: 'A', skillRef: 'x', output: 'r' }],
+          nodes: [{ id: 'a', type: 'skill', name: 'A', command: 'test' }],
           edges: [],
           createdBy: 'admin',
         }),
@@ -222,20 +207,7 @@ describe('WorkflowService', () => {
           name: 'test',
           machineId: '',
           triggerConfig: { type: 'manual' },
-          nodes: [{ id: 'a', type: 'skill', name: 'A', skillRef: 'x', output: 'r' }],
-          edges: [],
-          createdBy: 'admin',
-        }),
-      ).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError for empty nodes', async () => {
-      await expect(
-        service.createWorkflow({
-          name: 'test',
-          machineId: 'machine-1',
-          triggerConfig: { type: 'manual' },
-          nodes: [],
+          nodes: [{ id: 'a', type: 'skill', name: 'A', command: 'test' }],
           edges: [],
           createdBy: 'admin',
         }),
@@ -249,7 +221,7 @@ describe('WorkflowService', () => {
           name: 'content-pipeline',
           machineId: 'machine-1',
           triggerConfig: { type: 'manual' },
-          nodes: [{ id: 'a', type: 'skill', name: 'A', skillRef: 'x', output: 'r' }],
+          nodes: [{ id: 'a', type: 'skill', name: 'A', command: 'test' }],
           edges: [],
           createdBy: 'admin',
         }),
@@ -308,8 +280,7 @@ describe('WorkflowService', () => {
             id: 'broken',
             type: 'skill',
             name: 'Broken',
-            skillRef: '',
-            output: '',
+            command: '',
           },
         ],
         edges: [],
@@ -321,15 +292,24 @@ describe('WorkflowService', () => {
     });
   });
 
-  // --- Deploy ---
+  // --- Deploy to Machine ---
 
-  describe('deployWorkflow', () => {
-    it('deploys a valid workflow and creates a version snapshot', async () => {
+  describe('deployWorkflowToMachine', () => {
+    it('deploys workflow to machine and creates version', async () => {
       repo.findById.mockResolvedValue(makeWorkflow());
       repo.update.mockResolvedValue(makeWorkflow({ status: 'active', version: '1.0.1' }));
 
-      const result = await service.deployWorkflow('wf-1', 'admin');
+      const result = await service.deployWorkflowToMachine('wf-1', 'machine-1', 'admin');
 
+      expect(fileTransfer.ensureDirectory).toHaveBeenCalledWith(
+        expect.anything(),
+        '/home/user/.openclaw/workflows',
+      );
+      expect(fileTransfer.uploadFile).toHaveBeenCalledWith(
+        expect.anything(),
+        '/home/user/.openclaw/workflows/content-pipeline.lobster',
+        expect.stringContaining('name: content-pipeline'),
+      );
       expect(repo.createVersion).toHaveBeenCalledWith(
         expect.objectContaining({
           workflowId: 'wf-1',
@@ -337,110 +317,30 @@ describe('WorkflowService', () => {
           createdBy: 'admin',
         }),
       );
-      expect(repo.update).toHaveBeenCalledWith('wf-1', expect.objectContaining({
-        status: 'active',
-        version: '1.0.1',
-      }));
       expect(result.status).toBe('active');
+    });
+
+    it('deploys to agent workspace when scope is agent', async () => {
+      repo.findById.mockResolvedValue(makeWorkflow());
+      repo.update.mockResolvedValue(makeWorkflow({ status: 'active' }));
+
+      await service.deployWorkflowToMachine('wf-1', 'machine-1', 'admin', 'agent', 'agent-1');
+
+      expect(fileTransfer.ensureDirectory).toHaveBeenCalledWith(
+        expect.anything(),
+        '/home/user/.openclaw/workspace/workflows',
+      );
     });
 
     it('throws ValidationError for invalid workflow', async () => {
       repo.findById.mockResolvedValue(makeWorkflow({
-        nodes: [{ id: 'a', type: 'skill', name: 'A', skillRef: '', output: '' }],
+        nodes: [{ id: 'a', type: 'skill', name: 'A', command: '' }],
         edges: [],
       }));
 
-      await expect(service.deployWorkflow('wf-1', 'admin')).rejects.toThrow(ValidationError);
-    });
-  });
-
-  // --- Workflow Runs ---
-
-  describe('getRun', () => {
-    it('returns run when found', async () => {
-      repo.findRunById.mockResolvedValue(makeRun());
-      const result = await service.getRun('run-1');
-      expect(result.id).toBe('run-1');
-    });
-
-    it('throws NotFoundError when not found', async () => {
-      await expect(service.getRun('nonexistent')).rejects.toThrow(NotFoundError);
-    });
-  });
-
-  describe('abortRun', () => {
-    it('aborts a running workflow', async () => {
-      repo.findRunById.mockResolvedValue(makeRun({ status: 'running' }));
-      const result = await service.abortRun('run-1');
-      expect(repo.updateRunStatus).toHaveBeenCalledWith('run-1', 'aborted');
-      expect(result.status).toBe('aborted');
-    });
-
-    it('throws ValidationError for already completed run', async () => {
-      repo.findRunById.mockResolvedValue(makeRun({ status: 'completed' }));
-      await expect(service.abortRun('run-1')).rejects.toThrow(ValidationError);
-    });
-
-    it('throws ValidationError for already aborted run', async () => {
-      repo.findRunById.mockResolvedValue(makeRun({ status: 'aborted' }));
-      await expect(service.abortRun('run-1')).rejects.toThrow(ValidationError);
-    });
-  });
-
-  // --- Reviews ---
-
-  describe('getReview', () => {
-    it('returns review when found', async () => {
-      repo.findReviewByRunAndNode.mockResolvedValue(makeReview());
-      const result = await service.getReview('run-1', 'review');
-      expect(result.id).toBe('rev-1');
-    });
-
-    it('throws NotFoundError when not found', async () => {
-      await expect(service.getReview('run-1', 'nonexistent')).rejects.toThrow(NotFoundError);
-    });
-  });
-
-  describe('submitReviewDecision', () => {
-    it('approves a pending review', async () => {
-      repo.findReviewByRunAndNode.mockResolvedValue(makeReview());
-      const result = await service.submitReviewDecision(
-        'run-1', 'review', 'approved', 'user-1', 'Looks good',
-      );
-      expect(repo.updateReviewDecision).toHaveBeenCalledWith(
-        'rev-1', 'approved', 'user-1', 'Looks good',
-      );
-      expect(result.status).toBe('approved');
-    });
-
-    it('rejects a pending review', async () => {
-      repo.findReviewByRunAndNode.mockResolvedValue(makeReview());
-      repo.updateReviewDecision.mockResolvedValue(makeReview({ status: 'rejected', decision: 'rejected' }));
-      const result = await service.submitReviewDecision(
-        'run-1', 'review', 'rejected', 'user-1', 'Needs changes',
-      );
-      expect(result.status).toBe('rejected');
-    });
-
-    it('throws ValidationError for already decided review', async () => {
-      repo.findReviewByRunAndNode.mockResolvedValue(makeReview({ status: 'approved' }));
       await expect(
-        service.submitReviewDecision('run-1', 'review', 'approved', 'user-1'),
+        service.deployWorkflowToMachine('wf-1', 'machine-1', 'admin'),
       ).rejects.toThrow(ValidationError);
-    });
-  });
-
-  describe('checkExpiredReviews', () => {
-    it('marks expired reviews', async () => {
-      repo.findExpiredReviews.mockResolvedValue([makeReview()]);
-      const results = await service.checkExpiredReviews();
-      expect(repo.updateReviewStatus).toHaveBeenCalledWith('rev-1', 'expired');
-      expect(results).toHaveLength(1);
-    });
-
-    it('returns empty array when no expired reviews', async () => {
-      const results = await service.checkExpiredReviews();
-      expect(results).toHaveLength(0);
     });
   });
 });

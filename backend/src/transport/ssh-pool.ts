@@ -34,6 +34,7 @@ export class SSHPool {
   private maxPerMachine = config.ssh.maxConnectionsPerMachine;
   private idleTimeoutMs = config.ssh.idleTimeoutMs;
   private connectionTimeoutMs = config.ssh.connectionTimeoutMs;
+  private commandTimeoutMs = config.ssh.commandTimeoutMs;
   private queueTimeoutMs = config.ssh.queueTimeoutMs;
   private maxQueueSize = config.ssh.maxQueueSize;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -156,7 +157,7 @@ export class SSHPool {
     const client = await this.getConnection(info);
     try {
       return await new Promise((resolve, reject) => {
-        const timeoutMs = options.timeoutMs ?? 30_000;
+        const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
         const timer = setTimeout(() => {
           reject(new SSHError(info.machineId, command, `Command timed out after ${timeoutMs}ms`));
         }, timeoutMs);

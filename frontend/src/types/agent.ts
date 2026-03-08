@@ -43,3 +43,22 @@ export interface AgentConfigFile {
   filename: string;
   content: string;
 }
+
+export interface ProvisionChannelInput {
+  channelType: string;
+  accountId: string;
+  token?: string;
+  signingSecret?: string;
+  encryptKey?: string;
+}
+
+export interface ProvisionInput {
+  channels?: ProvisionChannelInput[];
+}
+
+export interface ProvisionEvent {
+  step: string;
+  status: 'running' | 'success' | 'error';
+  message: string;
+  detail?: string;
+}

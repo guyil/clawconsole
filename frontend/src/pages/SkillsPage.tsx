@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useSkills, useReviewSkill } from '../hooks/useSkills';
+import { useSkills, useReviewSkill, useSkillTags } from '../hooks/useSkills';
 import { DataTable } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -8,8 +8,9 @@ import { PageSpinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { AddSkillModal } from '../components/skills/AddSkillModal';
 import { ImportUrlModal } from '../components/skills/ImportUrlModal';
+import { ImportLocalModal } from '../components/skills/ImportLocalModal';
 import { DeploySkillModal } from '../components/skills/DeploySkillModal';
-import { Plus, Link2, Puzzle, Send, Eye, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, Link2, FolderOpen, Puzzle, Send, Eye, CheckCircle, XCircle, Tag, X } from 'lucide-react';
 import type { SkillCatalogEntry, SkillReviewStatus } from '../types/skill';
 
 const reviewStatusConfig: Record<SkillReviewStatus, { label: string; variant: 'success' | 'warning' | 'danger' | 'muted' }> = {
@@ -23,23 +24,33 @@ const sourceLabels: Record<string, string> = {
   custom: '自定义',
   clawhub: 'ClawHub',
   bundled: '内置',
+  local: '本地文件夹',
 };
 
 export function SkillsPage() {
   const navigate = useNavigate();
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterTag, setFilterTag] = useState<string>('');
+
+  const listParams: Record<string, string> = {};
+  if (filterStatus !== 'all') listParams.reviewStatus = filterStatus;
+  if (filterTag) listParams.tag = filterTag;
+
   const { data, isLoading } = useSkills(
-    filterStatus !== 'all' ? { reviewStatus: filterStatus } : undefined,
+    Object.keys(listParams).length > 0 ? listParams : undefined,
   );
+  const { data: tagsData } = useSkillTags();
   const review = useReviewSkill();
 
   const [showAdd, setShowAdd] = useState(false);
   const [showImportUrl, setShowImportUrl] = useState(false);
+  const [showImportLocal, setShowImportLocal] = useState(false);
   const [deploySkill, setDeploySkill] = useState<{ id: string; name: string } | null>(null);
 
   if (isLoading) return <PageSpinner />;
 
   const skills = data?.data ?? [];
+  const allTags = tagsData?.data ?? [];
 
   const statusFilters = [
     { id: 'all', label: '全部' },
@@ -51,7 +62,7 @@ export function SkillsPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex justify-between items-center mb-5">
+      <div className="flex justify-between items-center mb-3">
         <div className="flex gap-2 flex-wrap">
           {statusFilters.map((f) => (
             <button
@@ -68,6 +79,9 @@ export function SkillsPage() {
           ))}
         </div>
         <div className="flex gap-2">
+          <Button variant="secondary" icon={<FolderOpen size={16} />} onClick={() => setShowImportLocal(true)}>
+            从本地导入
+          </Button>
           <Button variant="secondary" icon={<Link2 size={16} />} onClick={() => setShowImportUrl(true)}>
             从 URL 导入
           </Button>
@@ -76,6 +90,35 @@ export function SkillsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Tag filter */}
+      {allTags.length > 0 && (
+        <div className="flex items-center gap-2 mb-5 flex-wrap">
+          <Tag size={14} className="text-claw-muted shrink-0" />
+          {allTags.map((t) => (
+            <button
+              key={t}
+              onClick={() => setFilterTag(filterTag === t ? '' : t)}
+              className={`px-3 py-1 rounded-full text-xs cursor-pointer border transition-all ${
+                filterTag === t
+                  ? 'bg-claw-accent/20 text-claw-accent border-claw-accent'
+                  : 'bg-claw-card text-claw-muted border-claw-border hover:border-claw-accent/50'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+          {filterTag && (
+            <button
+              onClick={() => setFilterTag('')}
+              className="text-claw-muted hover:text-claw-text transition-colors cursor-pointer"
+              title="清除标签筛选"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       {skills.length === 0 ? (
         <EmptyState
@@ -110,11 +153,36 @@ export function SkillsPage() {
             {
               key: 'source',
               header: '来源',
-              width: '1fr',
+              width: '0.8fr',
               render: (s) => (
                 <span className="text-claw-muted text-[13px]">
                   {sourceLabels[s.source] ?? s.source}
                 </span>
+              ),
+            },
+            {
+              key: 'tags',
+              header: '标签',
+              width: '1.2fr',
+              render: (s) => (
+                <div className="flex gap-1 flex-wrap">
+                  {s.tags && s.tags.length > 0 ? (
+                    s.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFilterTag(filterTag === tag ? '' : tag);
+                        }}
+                        className="px-2 py-0.5 bg-claw-accent/10 text-claw-accent border border-claw-accent/20 rounded-full text-[11px] cursor-pointer hover:bg-claw-accent/20 transition-colors"
+                      >
+                        {tag}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-claw-muted/50 text-[11px]">-</span>
+                  )}
+                </div>
               ),
             },
             {
@@ -198,6 +266,7 @@ export function SkillsPage() {
 
       <AddSkillModal open={showAdd} onClose={() => setShowAdd(false)} />
       <ImportUrlModal open={showImportUrl} onClose={() => setShowImportUrl(false)} />
+      <ImportLocalModal open={showImportLocal} onClose={() => setShowImportLocal(false)} />
       {deploySkill && (
         <DeploySkillModal
           open={!!deploySkill}

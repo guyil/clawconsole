@@ -129,6 +129,19 @@ export class FileTransfer {
     }
   }
 
+  async removeDirectory(info: SSHConnectionInfo, remoteDirPath: string): Promise<void> {
+    const resolved = await this.resolvePath(info, remoteDirPath);
+    const result = await this.pool.executeCommand(
+      info,
+      `rm -rf '${resolved}'`,
+      { timeoutMs: 15_000 },
+    );
+    if (result.exitCode !== 0) {
+      throw new SSHError(info.machineId, `rm-rf:${remoteDirPath}`, result.stderr);
+    }
+    log.debug({ machineId: info.machineId, remoteDirPath: resolved }, 'Directory removed');
+  }
+
   async deleteFile(info: SSHConnectionInfo, remotePath: string): Promise<void> {
     const resolved = await this.resolvePath(info, remotePath);
     const result = await this.pool.executeCommand(

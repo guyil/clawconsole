@@ -12,9 +12,7 @@ function skillNode(overrides: Partial<SkillNodeDef> = {}): SkillNodeDef {
     id: 'skill-1',
     type: 'skill',
     name: 'Test Skill',
-    skillRef: 'content-writer',
-    input: {},
-    output: 'skill_result',
+    command: 'exec --json --shell "python run.py"',
     ...overrides,
   };
 }
@@ -23,9 +21,7 @@ function reviewNode(overrides: Partial<ReviewNodeDef> = {}): ReviewNodeDef {
   return {
     id: 'review-1',
     type: 'review',
-    name: 'Manager Review',
-    reviewers: [{ role: 'manager' }],
-    policy: 'any',
+    name: 'Manager Approval',
     ...overrides,
   };
 }
@@ -35,10 +31,10 @@ function conditionNode(overrides: Partial<ConditionNodeDef> = {}): ConditionNode
     id: 'condition-1',
     type: 'condition',
     name: 'Quality Gate',
-    expression: '{{ nodes.skill-1.output.score > 0.8 }}',
+    expression: '$skill-1.passed',
     branches: [
-      { condition: 'true', target: 'publish' },
-      { condition: 'false', target: 'revise' },
+      { condition: '== true', target: 'publish' },
+      { condition: '== false', target: 'revise' },
     ],
     ...overrides,
   };
@@ -61,14 +57,20 @@ describe('validateWorkflow', () => {
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
+
+    it('validates a single review node (no config required)', () => {
+      const result = validateWorkflow([reviewNode()], []);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
   });
 
   describe('valid linear workflow', () => {
     it('validates a simple linear DAG', () => {
       const nodes = [
-        skillNode({ id: 'draft', output: 'draft_result' }),
+        skillNode({ id: 'draft' }),
         reviewNode({ id: 'review' }),
-        skillNode({ id: 'publish', skillRef: 'publisher', output: 'publish_result' }),
+        skillNode({ id: 'publish', command: 'publish --final' }),
       ];
       const edges: WorkflowEdgeDef[] = [
         { source: 'draft', target: 'review' },
@@ -84,21 +86,21 @@ describe('validateWorkflow', () => {
   describe('valid branching workflow', () => {
     it('validates a workflow with condition branches', () => {
       const nodes = [
-        skillNode({ id: 'draft', output: 'draft_result' }),
+        skillNode({ id: 'draft' }),
         conditionNode({
           id: 'gate',
           branches: [
-            { condition: 'true', target: 'publish' },
-            { condition: 'false', target: 'revise' },
+            { condition: '== true', target: 'publish' },
+            { condition: '== false', target: 'revise' },
           ],
         }),
-        skillNode({ id: 'publish', skillRef: 'publisher', output: 'pub_result' }),
-        skillNode({ id: 'revise', skillRef: 'reviser', output: 'rev_result' }),
+        skillNode({ id: 'publish', command: 'publish' }),
+        skillNode({ id: 'revise', command: 'revise' }),
       ];
       const edges: WorkflowEdgeDef[] = [
         { source: 'draft', target: 'gate' },
-        { source: 'gate', target: 'publish', condition: 'true' },
-        { source: 'gate', target: 'revise', condition: 'false' },
+        { source: 'gate', target: 'publish', condition: '== true' },
+        { source: 'gate', target: 'revise', condition: '== false' },
       ];
 
       const result = validateWorkflow(nodes, edges);
@@ -109,8 +111,8 @@ describe('validateWorkflow', () => {
   describe('duplicate node IDs', () => {
     it('detects duplicate node IDs', () => {
       const nodes = [
-        skillNode({ id: 'dup', output: 'result1' }),
-        skillNode({ id: 'dup', output: 'result2' }),
+        skillNode({ id: 'dup' }),
+        skillNode({ id: 'dup', command: 'other' }),
       ];
       const result = validateWorkflow(nodes, []);
       expect(result.valid).toBe(false);
@@ -122,10 +124,8 @@ describe('validateWorkflow', () => {
 
   describe('invalid edge references', () => {
     it('detects edge source that does not exist', () => {
-      const nodes = [skillNode({ id: 'a', output: 'a_result' })];
-      const edges: WorkflowEdgeDef[] = [
-        { source: 'nonexistent', target: 'a' },
-      ];
+      const nodes = [skillNode({ id: 'a' })];
+      const edges: WorkflowEdgeDef[] = [{ source: 'nonexistent', target: 'a' }];
 
       const result = validateWorkflow(nodes, edges);
       expect(result.valid).toBe(false);
@@ -135,10 +135,8 @@ describe('validateWorkflow', () => {
     });
 
     it('detects edge target that does not exist', () => {
-      const nodes = [skillNode({ id: 'a', output: 'a_result' })];
-      const edges: WorkflowEdgeDef[] = [
-        { source: 'a', target: 'nonexistent' },
-      ];
+      const nodes = [skillNode({ id: 'a' })];
+      const edges: WorkflowEdgeDef[] = [{ source: 'a', target: 'nonexistent' }];
 
       const result = validateWorkflow(nodes, edges);
       expect(result.valid).toBe(false);
@@ -151,8 +149,8 @@ describe('validateWorkflow', () => {
   describe('orphan nodes', () => {
     it('detects nodes with no connections', () => {
       const nodes = [
-        skillNode({ id: 'a', output: 'a_result' }),
-        skillNode({ id: 'orphan', output: 'orphan_result' }),
+        skillNode({ id: 'a' }),
+        skillNode({ id: 'orphan', command: 'orphan' }),
       ];
       const edges: WorkflowEdgeDef[] = [];
 
@@ -170,8 +168,8 @@ describe('validateWorkflow', () => {
   describe('cycle detection', () => {
     it('detects a simple cycle', () => {
       const nodes = [
-        skillNode({ id: 'a', output: 'a_result' }),
-        skillNode({ id: 'b', skillRef: 'other', output: 'b_result' }),
+        skillNode({ id: 'a' }),
+        skillNode({ id: 'b', command: 'other' }),
       ];
       const edges: WorkflowEdgeDef[] = [
         { source: 'a', target: 'b' },
@@ -185,9 +183,9 @@ describe('validateWorkflow', () => {
 
     it('detects a three-node cycle', () => {
       const nodes = [
-        skillNode({ id: 'a', output: 'a_result' }),
-        skillNode({ id: 'b', skillRef: 'other', output: 'b_result' }),
-        skillNode({ id: 'c', skillRef: 'third', output: 'c_result' }),
+        skillNode({ id: 'a' }),
+        skillNode({ id: 'b', command: 'b' }),
+        skillNode({ id: 'c', command: 'c' }),
       ];
       const edges: WorkflowEdgeDef[] = [
         { source: 'a', target: 'b' },
@@ -202,67 +200,53 @@ describe('validateWorkflow', () => {
   });
 
   describe('skill node validation', () => {
-    it('detects missing skillRef', () => {
-      const nodes = [skillNode({ id: 'a', skillRef: '', output: 'a_result' })];
+    it('detects missing command', () => {
+      const nodes = [skillNode({ id: 'a', command: '' })];
       const result = validateWorkflow(nodes, []);
       expect(result.valid).toBe(false);
       expect(result.errors).toContainEqual(
-        expect.objectContaining({ type: 'MISSING_SKILL_REF', nodeId: 'a' }),
+        expect.objectContaining({ type: 'MISSING_COMMAND', nodeId: 'a' }),
       );
     });
 
-    it('detects missing output key', () => {
-      const nodes = [skillNode({ id: 'a', output: '' })];
-      const result = validateWorkflow(nodes, []);
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({ type: 'MISSING_OUTPUT', nodeId: 'a' }),
-      );
-    });
-
-    it('detects unapproved skill when approvedSkillKeys provided', () => {
+    it('warns about unresolved skillRef', () => {
       const approvedSkillKeys = new Set(['approved-skill']);
-      const nodes = [skillNode({ id: 'a', skillRef: 'unapproved-skill', output: 'a_result' })];
+      const nodes = [skillNode({ id: 'a', skillRef: 'unapproved-skill' })];
 
       const result = validateWorkflow(nodes, [], approvedSkillKeys);
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({ type: 'MISSING_SKILL', nodeId: 'a' }),
-      );
-    });
-
-    it('passes when skill is approved', () => {
-      const approvedSkillKeys = new Set(['content-writer']);
-      const nodes = [skillNode({ id: 'a', output: 'a_result' })];
-
-      const result = validateWorkflow(nodes, [], approvedSkillKeys);
-      expect(result.valid).toBe(true);
-    });
-  });
-
-  describe('review node validation', () => {
-    it('detects missing reviewers', () => {
-      const nodes = [reviewNode({ id: 'r', reviewers: [] })];
-      const result = validateWorkflow(nodes, []);
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({ type: 'NO_REVIEWERS', nodeId: 'r' }),
-      );
-    });
-
-    it('warns about missing timeout', () => {
-      const nodes = [reviewNode({ id: 'r' })];
-      const result = validateWorkflow(nodes, []);
       expect(result.valid).toBe(true);
       expect(result.warnings).toContainEqual(
-        expect.objectContaining({ type: 'NO_TIMEOUT', nodeId: 'r' }),
+        expect.objectContaining({ type: 'UNRESOLVED_SKILL_REF', nodeId: 'a' }),
       );
     });
 
-    it('no warning when timeout is set', () => {
-      const nodes = [reviewNode({ id: 'r', timeout: '2h' })];
+    it('no warning when skillRef is approved', () => {
+      const approvedSkillKeys = new Set(['content-writer']);
+      const nodes = [skillNode({ id: 'a', skillRef: 'content-writer' })];
+
+      const result = validateWorkflow(nodes, [], approvedSkillKeys);
+      expect(result.valid).toBe(true);
+      expect(result.warnings.filter((w) => w.type === 'UNRESOLVED_SKILL_REF')).toHaveLength(0);
+    });
+
+    it('detects invalid stdin reference', () => {
+      const nodes = [skillNode({ id: 'a', stdin: '$nonexistent.stdout' })];
       const result = validateWorkflow(nodes, []);
-      expect(result.warnings.filter((w) => w.type === 'NO_TIMEOUT')).toHaveLength(0);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ type: 'INVALID_STDIN_REF', nodeId: 'a' }),
+      );
+    });
+
+    it('accepts valid stdin reference', () => {
+      const nodes = [
+        skillNode({ id: 'step1' }),
+        skillNode({ id: 'step2', command: 'process', stdin: '$step1.stdout' }),
+      ];
+      const edges: WorkflowEdgeDef[] = [{ source: 'step1', target: 'step2' }];
+
+      const result = validateWorkflow(nodes, edges);
+      expect(result.valid).toBe(true);
     });
   });
 
@@ -288,7 +272,7 @@ describe('validateWorkflow', () => {
     it('detects invalid branch target', () => {
       const nodes = [conditionNode({
         id: 'c',
-        branches: [{ condition: 'true', target: 'nonexistent' }],
+        branches: [{ condition: '== true', target: 'nonexistent' }],
       })];
       const result = validateWorkflow(nodes, []);
       expect(result.valid).toBe(false);
@@ -298,58 +282,48 @@ describe('validateWorkflow', () => {
     });
   });
 
-  describe('duplicate output keys', () => {
-    it('detects duplicate output keys across skill nodes', () => {
-      const nodes = [
-        skillNode({ id: 'a', output: 'same_key' }),
-        skillNode({ id: 'b', skillRef: 'other', output: 'same_key' }),
-      ];
-      const edges: WorkflowEdgeDef[] = [{ source: 'a', target: 'b' }];
+  describe('review node validation', () => {
+    it('review nodes pass validation with no config', () => {
+      const nodes = [reviewNode()];
+      const result = validateWorkflow(nodes, []);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
 
-      const result = validateWorkflow(nodes, edges);
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({ type: 'DUPLICATE_OUTPUT_KEY' }),
-      );
+    it('review nodes pass with optional prompt', () => {
+      const nodes = [reviewNode({ prompt: 'Please review' })];
+      const result = validateWorkflow(nodes, []);
+      expect(result.valid).toBe(true);
     });
   });
 
   describe('complex valid workflow', () => {
-    it('validates a full content-pipeline workflow', () => {
-      const approvedSkillKeys = new Set([
-        'content-writer',
-        'seo-optimizer',
-        'content-publisher',
-        'content-reviser',
-      ]);
-
+    it('validates a full pipeline workflow', () => {
       const nodes = [
-        skillNode({ id: 'draft', skillRef: 'content-writer', output: 'draft_result' }),
-        skillNode({ id: 'seo', skillRef: 'seo-optimizer', output: 'seo_result' }),
-        reviewNode({ id: 'review', timeout: '2h' }),
+        skillNode({ id: 'collect', command: 'inbox list --json' }),
+        skillNode({ id: 'categorize', command: 'inbox categorize --json', stdin: '$collect.stdout' }),
+        reviewNode({ id: 'approve', prompt: 'Review categorization' }),
         conditionNode({
           id: 'gate',
+          expression: '$approve.approved',
           branches: [
-            { condition: 'true', target: 'publish' },
-            { condition: 'false', target: 'revise' },
+            { condition: '== true', target: 'execute' },
+            { condition: '== false', target: 'collect' },
           ],
         }),
-        skillNode({ id: 'publish', skillRef: 'content-publisher', output: 'pub_result' }),
-        skillNode({ id: 'revise', skillRef: 'content-reviser', output: 'rev_result' }),
+        skillNode({ id: 'execute', command: 'inbox apply --execute', stdin: '$categorize.stdout' }),
       ];
 
       const edges: WorkflowEdgeDef[] = [
-        { source: 'draft', target: 'seo' },
-        { source: 'seo', target: 'review' },
-        { source: 'review', target: 'gate' },
-        { source: 'gate', target: 'publish' },
-        { source: 'gate', target: 'revise' },
+        { source: 'collect', target: 'categorize' },
+        { source: 'categorize', target: 'approve' },
+        { source: 'approve', target: 'gate' },
+        { source: 'gate', target: 'execute' },
       ];
 
-      const result = validateWorkflow(nodes, edges, approvedSkillKeys);
+      const result = validateWorkflow(nodes, edges);
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
-      expect(result.warnings).toHaveLength(0);
     });
   });
 });

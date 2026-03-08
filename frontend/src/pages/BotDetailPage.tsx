@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useAgent, useAgentConfigFiles } from '../hooks/useAgents';
-import { useAgentSkills, useSkills, useInstallSkill, useRemoveSkillFromAgent } from '../hooks/useSkills';
+import { useAgent, useAgentConfigFiles, useAgentMemoryFiles, useProvisionAgent } from '../hooks/useAgents';
+import { useAgentSkills, useSkills, useInstallSkill, useRemoveSkillFromAgent, useRemoveDiscoveredSkill, useRemoveGlobalSkill, useRediscoverSkills } from '../hooks/useSkills';
 import { StatusDot } from '../components/ui/StatusDot';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { PageSpinner, Spinner } from '../components/ui/Spinner';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { BotConfigChatPanel, ConfigDiffPreview } from '../components/bot-config';
-import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles } from 'lucide-react';
+import { MemoryTab } from '../components/memory';
+import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles, Rocket, RefreshCw, Activity, Brain } from 'lucide-react';
 import type { SkillCatalogEntry } from '../types/skill';
 
 const statusLabels: Record<string, string> = {
@@ -32,29 +34,43 @@ const FILE_DISPLAY_ORDER = [
   'README.md',
 ];
 
+const MEMORY_FILENAMES = new Set(['MEMORY.md', 'memory.md']);
+
 function fileSortKey(filename: string): number {
   const idx = FILE_DISPLAY_ORDER.indexOf(filename);
   return idx >= 0 ? idx : FILE_DISPLAY_ORDER.length;
 }
 
-type Tab = 'config' | 'ai-config' | 'skills';
+type Tab = 'config' | 'ai-config' | 'memory' | 'skills';
 
 export function BotDetailPage() {
   const { agentId } = useParams<{ agentId: string }>();
   const { data: agent, isLoading } = useAgent(agentId!);
   const { data: configData, isLoading: configLoading } = useAgentConfigFiles(agentId!);
+  const { data: memoryData } = useAgentMemoryFiles(agentId!);
   const { data: agentSkillsData, isLoading: skillsLoading } = useAgentSkills(agentId!);
   const { data: allSkillsData } = useSkills({ reviewStatus: 'approved' });
 
   const installSkill = useInstallSkill();
   const removeSkill = useRemoveSkillFromAgent();
+  const removeDiscoveredSkill = useRemoveDiscoveredSkill();
+  const removeGlobalSkill = useRemoveGlobalSkill();
+  const rediscoverSkills = useRediscoverSkills();
+  const provisionAgent = useProvisionAgent();
 
   const [activeTab, setActiveTab] = useState<Tab>('config');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [skillToRemove, setSkillToRemove] = useState<{ key: string; type: 'agent' | 'global' } | null>(null);
 
   if (isLoading || !agent) return <PageSpinner />;
 
-  const configFiles = configData?.data ?? [];
+  const handleDeploy = () => {
+    provisionAgent.mutate({ agentId: agentId! });
+  };
+
+  const isTransitioning = agent.status === 'packaging' || agent.status === 'syncing';
+
+  const configFiles = (configData?.data ?? []).filter((f) => !MEMORY_FILENAMES.has(f.filename));
   const sortedFiles = [...configFiles].sort((a, b) => fileSortKey(a.filename) - fileSortKey(b.filename));
 
   const activeFile = selectedFile ?? sortedFiles[0]?.filename ?? null;
@@ -69,9 +85,12 @@ export function BotDetailPage() {
   const agentOwnSkills: string[] = agent.discoveredSkills ?? [];
   const totalDiscoveredSkills = globalSkills.length + agentOwnSkills.length;
 
+  const memoryFileCount = memoryData?.totalFiles ?? 0;
+
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
     { id: 'config', label: '身份配置', icon: FileText, count: sortedFiles.length },
     { id: 'ai-config', label: 'AI 配置助手', icon: Sparkles },
+    { id: 'memory', label: '记忆管理', icon: Brain, count: memoryFileCount },
     { id: 'skills', label: 'Skills', icon: Puzzle, count: totalDiscoveredSkills + installedSkills.length },
   ];
 
@@ -104,9 +123,46 @@ export function BotDetailPage() {
               </div>
             </div>
           </div>
-          <Badge variant={agent.status === 'online' ? 'success' : agent.status === 'offline' ? 'danger' : 'muted'}>
-            {statusLabels[agent.status] ?? agent.status}
-          </Badge>
+          <div className="flex items-center gap-2">
+            {agent.status === 'draft' && (
+              <Button
+                size="sm"
+                icon={<Rocket size={14} />}
+                loading={provisionAgent.isPending}
+                onClick={handleDeploy}
+              >
+                部署 Bot
+              </Button>
+            )}
+            {(agent.status === 'offline' || agent.status === 'packaging') && (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Activity size={14} />}
+                >
+                  检查状态
+                </Button>
+                <Button
+                  size="sm"
+                  icon={<RefreshCw size={14} />}
+                  loading={provisionAgent.isPending}
+                  onClick={handleDeploy}
+                >
+                  重新部署
+                </Button>
+              </>
+            )}
+            {agent.status === 'syncing' && (
+              <div className="flex items-center gap-2 text-sm text-claw-muted">
+                <Spinner size={14} />
+                {statusLabels[agent.status]}...
+              </div>
+            )}
+            <Badge variant={agent.status === 'online' ? 'success' : agent.status === 'offline' ? 'danger' : 'muted'}>
+              {statusLabels[agent.status] ?? agent.status}
+            </Badge>
+          </div>
         </div>
 
         <div className="flex gap-6 mt-4 pt-4 border-t border-claw-border text-sm">
@@ -219,9 +275,26 @@ export function BotDetailPage() {
         </div>
       )}
 
+      {/* Memory Tab */}
+      {activeTab === 'memory' && (
+        <MemoryTab agentId={agentId!} />
+      )}
+
       {/* Skills Tab */}
       {activeTab === 'skills' && (
         <div className="space-y-5">
+          <div className="flex justify-end">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<RefreshCw size={13} className={rediscoverSkills.isPending ? 'animate-spin' : ''} />}
+              loading={rediscoverSkills.isPending}
+              onClick={() => rediscoverSkills.mutate(agentId!)}
+            >
+              刷新 Skills 发现
+            </Button>
+          </div>
+
           {/* Discovered: Global Skills (shared across all agents on this machine) */}
           <div>
             <h4 className="text-sm font-semibold text-claw-text mb-3 flex items-center gap-2">
@@ -238,15 +311,23 @@ export function BotDetailPage() {
                 {globalSkills.map((skill) => (
                   <div
                     key={skill}
-                    className="bg-claw-card rounded-xl border border-claw-border p-4 flex items-center gap-3"
+                    className="bg-claw-card rounded-xl border border-claw-border p-4 flex items-center justify-between"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500/25 to-cyan-500/25 flex items-center justify-center shrink-0">
-                      <Globe size={14} className="text-blue-400" />
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500/25 to-cyan-500/25 flex items-center justify-center shrink-0">
+                        <Globe size={14} className="text-blue-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-claw-text truncate">{skill}</div>
+                        <div className="text-xs text-claw-muted">共享 · 节点级</div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-claw-text truncate">{skill}</div>
-                      <div className="text-xs text-claw-muted">共享 · 节点级</div>
-                    </div>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      icon={<Trash2 size={13} />}
+                      onClick={() => setSkillToRemove({ key: skill, type: 'global' })}
+                    />
                   </div>
                 ))}
               </div>
@@ -269,15 +350,23 @@ export function BotDetailPage() {
                 {agentOwnSkills.map((skill) => (
                   <div
                     key={skill}
-                    className="bg-claw-card rounded-xl border border-claw-border p-4 flex items-center gap-3"
+                    className="bg-claw-card rounded-xl border border-claw-border p-4 flex items-center justify-between"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500/25 to-fuchsia-500/25 flex items-center justify-center shrink-0">
-                      <User size={14} className="text-purple-400" />
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500/25 to-fuchsia-500/25 flex items-center justify-center shrink-0">
+                        <User size={14} className="text-purple-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-claw-text truncate">{skill}</div>
+                        <div className="text-xs text-claw-muted">专属 · Bot 级</div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-claw-text truncate">{skill}</div>
-                      <div className="text-xs text-claw-muted">专属 · Bot 级</div>
-                    </div>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      icon={<Trash2 size={13} />}
+                      onClick={() => setSkillToRemove({ key: skill, type: 'agent' })}
+                    />
                   </div>
                 ))}
               </div>
@@ -386,6 +475,28 @@ export function BotDetailPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!skillToRemove}
+        onClose={() => setSkillToRemove(null)}
+        title={skillToRemove?.type === 'global' ? '移除共享 Skill' : '移除专属 Skill'}
+        message={
+          skillToRemove?.type === 'global'
+            ? `确定要移除共享 Skill "${skillToRemove.key}" 吗？此操作将删除远程节点上的 Skill 文件，且会影响该节点上的所有 Bot。此操作不可撤销。`
+            : `确定要移除专属 Skill "${skillToRemove?.key}" 吗？此操作将删除远程节点上的 Skill 文件，不可撤销。`
+        }
+        confirmLabel="移除"
+        variant="danger"
+        loading={removeDiscoveredSkill.isPending || removeGlobalSkill.isPending}
+        onConfirm={() => {
+          if (!skillToRemove) return;
+          const mutation = skillToRemove.type === 'global' ? removeGlobalSkill : removeDiscoveredSkill;
+          mutation.mutate(
+            { agentId: agentId!, skillKey: skillToRemove.key },
+            { onSettled: () => setSkillToRemove(null) },
+          );
+        }}
+      />
     </div>
   );
 }

@@ -26,9 +26,11 @@ function makeSkill(overrides: Partial<SkillCatalogEntry> = {}): SkillCatalogEntr
     auxiliaryFiles: null,
     requiresBins: null,
     requiresEnv: null,
+    tags: null,
     reviewStatus: 'pending',
     reviewedBy: null,
     reviewedAt: null,
+    localPath: null,
     createdAt: new Date('2026-03-01'),
     updatedAt: new Date('2026-03-01'),
     ...overrides,
@@ -382,6 +384,51 @@ describe('SkillService', () => {
       await expect(
         service.deploySkillToMachine('skill-1', 'machine-1', 'global'),
       ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe('tags', () => {
+    it('creates a skill with tags', async () => {
+      const skillWithTags = makeSkill({ tags: ['automation', 'daily'] });
+      repo.create.mockResolvedValue(skillWithTags);
+
+      const result = await service.createSkill({
+        skillKey: 'morning-standup',
+        name: 'Morning Standup',
+        tags: ['automation', 'daily'],
+      });
+
+      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({
+        tags: ['automation', 'daily'],
+      }));
+      expect(result.tags).toEqual(['automation', 'daily']);
+    });
+
+    it('updates skill tags', async () => {
+      repo.findById.mockResolvedValue(makeSkill());
+      repo.update.mockResolvedValue(makeSkill({ tags: ['updated-tag'] }));
+
+      const result = await service.updateSkill('skill-1', {
+        tags: ['updated-tag'],
+      });
+
+      expect(repo.update).toHaveBeenCalledWith('skill-1', { tags: ['updated-tag'] });
+      expect(result.tags).toEqual(['updated-tag']);
+    });
+
+    it('clears tags by setting empty array', async () => {
+      repo.findById.mockResolvedValue(makeSkill({ tags: ['old-tag'] }));
+      repo.update.mockResolvedValue(makeSkill({ tags: [] }));
+
+      const result = await service.updateSkill('skill-1', { tags: [] });
+
+      expect(repo.update).toHaveBeenCalledWith('skill-1', { tags: [] });
+      expect(result.tags).toEqual([]);
+    });
+
+    it('passes tag filter to repository', async () => {
+      await service.listSkills({ tag: 'automation' });
+      expect(repo.findAll).toHaveBeenCalledWith({ tag: 'automation' });
     });
   });
 });

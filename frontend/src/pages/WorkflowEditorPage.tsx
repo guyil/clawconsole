@@ -1,10 +1,9 @@
 import { useState, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import {
   useWorkflow,
   useUpdateWorkflow,
   useValidateWorkflow,
-  useDeployWorkflow,
   useWorkflowVersions,
 } from '../hooks/useWorkflows';
 import { workflowsApi } from '../api/workflows.api';
@@ -13,6 +12,7 @@ import { NodeConfigPanel } from '../components/workflow/NodeConfigPanel';
 import { WorkflowToolbar } from '../components/workflow/WorkflowToolbar';
 import { ValidationPanel } from '../components/workflow/ValidationPanel';
 import { YamlPreviewModal } from '../components/workflow/YamlPreviewModal';
+import { DeployWorkflowModal } from '../components/workflow/DeployWorkflowModal';
 import { PageSpinner } from '../components/ui/Spinner';
 import { Badge } from '../components/ui/Badge';
 import { ChevronLeft, Clock, FileText } from 'lucide-react';
@@ -34,9 +34,9 @@ function createDefaultNode(type: 'skill' | 'review' | 'condition'): WorkflowNode
   const id = generateNodeId(type);
   switch (type) {
     case 'skill':
-      return { id, type: 'skill', name: '新 Skill 节点', skillRef: '', output: `${id}_output` };
+      return { id, type: 'skill', name: '新 Skill 节点', command: '' };
     case 'review':
-      return { id, type: 'review', name: '新审核节点', reviewers: [{ role: 'admin' }], policy: 'any' };
+      return { id, type: 'review', name: '新审核节点' };
     case 'condition':
       return {
         id,
@@ -50,11 +50,9 @@ function createDefaultNode(type: 'skill' | 'review' | 'condition'): WorkflowNode
 
 export function WorkflowEditorPage() {
   const { workflowId } = useParams<{ workflowId: string }>();
-  const navigate = useNavigate();
   const { data: workflow, isLoading } = useWorkflow(workflowId!);
   const updateWorkflow = useUpdateWorkflow();
   const validateWorkflow = useValidateWorkflow();
-  const deployWorkflow = useDeployWorkflow();
   const { data: versionsData } = useWorkflowVersions(workflowId!);
 
   // Local editor state
@@ -65,6 +63,7 @@ export function WorkflowEditorPage() {
   const [yamlContent, setYamlContent] = useState<string | null>(null);
   const [showYaml, setShowYaml] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+  const [showDeploy, setShowDeploy] = useState(false);
 
   const nodes = localNodes ?? workflow?.nodes ?? [];
   const edges = localEdges ?? workflow?.edges ?? [];
@@ -91,14 +90,11 @@ export function WorkflowEditorPage() {
       const currentEdges = localEdges ?? workflow?.edges ?? [];
 
       if (afterNodeId) {
-        // Insert after the specified node
         const idx = current.findIndex((n) => n.id === afterNodeId);
         const newNodes = [...current];
         newNodes.splice(idx + 1, 0, newNode);
         setLocalNodes(newNodes);
 
-        // Update edges: replace edges FROM afterNode to point to new node,
-        // and add edge from new node to old targets
         const outEdges = currentEdges.filter((e) => e.source === afterNodeId);
         const otherEdges = currentEdges.filter((e) => e.source !== afterNodeId);
         const updatedEdges = [
@@ -108,11 +104,9 @@ export function WorkflowEditorPage() {
         ];
         setLocalEdges(updatedEdges);
       } else {
-        // Append to end
         const newNodes = [...current, newNode];
         setLocalNodes(newNodes);
 
-        // If there's a last node, add an edge
         if (current.length > 0) {
           const lastNode = current[current.length - 1];
           setLocalEdges([...currentEdges, { source: lastNode.id, target: newNode.id }]);
@@ -129,12 +123,10 @@ export function WorkflowEditorPage() {
       const current = localNodes ?? workflow?.nodes ?? [];
       const currentEdges = localEdges ?? workflow?.edges ?? [];
 
-      // Find incoming and outgoing edges
       const inEdges = currentEdges.filter((e) => e.target === nodeId);
       const outEdges = currentEdges.filter((e) => e.source === nodeId);
       const otherEdges = currentEdges.filter((e) => e.source !== nodeId && e.target !== nodeId);
 
-      // Reconnect: each source → each target
       const reconnected: WorkflowEdgeDef[] = [];
       for (const inE of inEdges) {
         for (const outE of outEdges) {
@@ -175,16 +167,10 @@ export function WorkflowEditorPage() {
 
   async function handleValidate() {
     if (!workflow) return;
-    // Save first if there are changes
     if (hasChanges) await handleSave();
     validateWorkflow.mutate(workflow.id, {
       onSuccess: (result) => setValidation(result),
     });
-  }
-
-  async function handleDeploy() {
-    if (!workflow) return;
-    deployWorkflow.mutate({ id: workflow.id, deployedBy: 'admin' });
   }
 
   async function handleYaml() {
@@ -221,12 +207,11 @@ export function WorkflowEditorPage() {
         status={workflow.status}
         onSave={handleSave}
         onValidate={handleValidate}
-        onDeploy={handleDeploy}
+        onDeploy={() => setShowDeploy(true)}
         onYaml={handleYaml}
         onVersions={() => setShowVersions(!showVersions)}
         saving={updateWorkflow.isPending}
         validating={validateWorkflow.isPending}
-        deploying={deployWorkflow.isPending}
         validation={validation}
         hasChanges={hasChanges}
       />
@@ -305,6 +290,14 @@ export function WorkflowEditorPage() {
           workflowName={workflow.name}
         />
       )}
+
+      {/* Deploy Modal */}
+      <DeployWorkflowModal
+        open={showDeploy}
+        onClose={() => setShowDeploy(false)}
+        workflowId={workflow.id}
+        workflowName={workflow.name}
+      />
     </div>
   );
 }

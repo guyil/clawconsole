@@ -1,16 +1,14 @@
 import type { WorkflowRepository } from './workflow.repository.js';
 import type { SkillRepository } from '../skills/skill.repository.js';
+import type { MachineService } from '../machines/machine.service.js';
+import type { AgentRepository } from '../agents/agent.repository.js';
+import type { FileTransfer } from '../../transport/file-transfer.js';
 import type {
   Workflow,
   CreateWorkflowInput,
   UpdateWorkflowInput,
   WorkflowVersion,
-  WorkflowRun,
-  WorkflowRunNode,
-  WorkflowReview,
   WorkflowStatus,
-  WorkflowRunStatus,
-  ReviewDecision,
   ValidationResult,
 } from './workflow.types.js';
 import { validateWorkflow } from './workflow.validator.js';
@@ -24,6 +22,9 @@ export class WorkflowService {
   constructor(
     private repo: WorkflowRepository,
     private skillRepo: SkillRepository,
+    private machineService: MachineService,
+    private agentRepo: AgentRepository,
+    private fileTransfer: FileTransfer,
   ) {}
 
   // --- Workflow CRUD ---
@@ -51,9 +52,6 @@ export class WorkflowService {
     }
     if (!input.triggerConfig) {
       throw new ValidationError('Trigger configuration is required');
-    }
-    if (!input.nodes || input.nodes.length === 0) {
-      throw new ValidationError('Workflow must have at least one node');
     }
 
     const existing = await this.repo.findByName(input.name, input.machineId);
@@ -89,7 +87,6 @@ export class WorkflowService {
   async validateWorkflow(id: string): Promise<ValidationResult> {
     const workflow = await this.getWorkflow(id);
 
-    // Get approved skills for reference checking
     const approvedSkills = await this.skillRepo.findAll({ reviewStatus: 'approved' });
     const approvedSkillKeys = new Set(approvedSkills.map((s) => s.skillKey));
 
@@ -103,23 +100,50 @@ export class WorkflowService {
     return generateWorkflowYaml(workflow);
   }
 
-  // --- Deploy ---
+  // --- Deploy to Machine ---
 
-  async deployWorkflow(id: string, deployedBy: string): Promise<Workflow> {
-    const workflow = await this.getWorkflow(id);
+  async deployWorkflowToMachine(
+    workflowId: string,
+    machineId: string,
+    deployedBy: string,
+    scope: 'global' | 'agent' = 'global',
+    agentId?: string,
+  ): Promise<Workflow> {
+    const workflow = await this.getWorkflow(workflowId);
 
-    // Validate before deploying
-    const validation = await this.validateWorkflow(id);
+    const validation = await this.validateWorkflow(workflowId);
     if (!validation.valid) {
       throw new ValidationError('Workflow validation failed', {
         errors: validation.errors,
       });
     }
 
+    const yamlContent = generateWorkflowYaml(workflow);
+    const machine = await this.machineService.getMachine(machineId);
+    const connInfo = this.machineService.toConnectionInfo(machine);
+
+    let workflowDir: string;
+
+    if (scope === 'agent' && agentId) {
+      const agent = await this.agentRepo.findById(agentId);
+      if (!agent) throw new NotFoundError('Agent', agentId);
+      const workspacePath = agent.workspacePath ?? 'workspace';
+      workflowDir = `${machine.openclawHome}/${workspacePath}/workflows`;
+    } else {
+      workflowDir = `${machine.openclawHome}/workflows`;
+    }
+
+    await this.fileTransfer.ensureDirectory(connInfo, workflowDir);
+    await this.fileTransfer.uploadFile(
+      connInfo,
+      `${workflowDir}/${workflow.workflowKey}.lobster`,
+      yamlContent,
+    );
+
     // Create version snapshot
     const nextVersion = incrementVersion(workflow.version);
     await this.repo.createVersion({
-      workflowId: id,
+      workflowId,
       version: nextVersion,
       snapshotJson: {
         name: workflow.name,
@@ -132,15 +156,17 @@ export class WorkflowService {
       createdBy: deployedBy,
     });
 
-    // Update workflow status
-    const updated = await this.repo.update(id, {
+    const updated = await this.repo.update(workflowId, {
       status: 'active',
       version: nextVersion,
       deployedAt: new Date(),
       updatedBy: deployedBy,
     });
 
-    log.info({ workflowId: id, version: nextVersion, deployedBy }, 'Workflow deployed');
+    log.info(
+      { workflowId, version: nextVersion, machineId, scope, deployedBy },
+      'Workflow deployed to machine',
+    );
     return updated!;
   }
 
@@ -150,94 +176,8 @@ export class WorkflowService {
     await this.getWorkflow(workflowId);
     return this.repo.findVersions(workflowId);
   }
-
-  // --- Workflow Runs ---
-
-  async listRuns(filters?: {
-    workflowId?: string;
-    machineId?: string;
-    status?: WorkflowRunStatus;
-  }): Promise<WorkflowRun[]> {
-    return this.repo.findRuns(filters);
-  }
-
-  async getRun(id: string): Promise<WorkflowRun> {
-    const run = await this.repo.findRunById(id);
-    if (!run) throw new NotFoundError('WorkflowRun', id);
-    return run;
-  }
-
-  async getRunNodes(runId: string): Promise<WorkflowRunNode[]> {
-    await this.getRun(runId);
-    return this.repo.findRunNodes(runId);
-  }
-
-  async abortRun(id: string): Promise<WorkflowRun> {
-    const run = await this.getRun(id);
-    if (run.status === 'completed' || run.status === 'aborted') {
-      throw new ValidationError(`Cannot abort a run with status '${run.status}'`);
-    }
-    const updated = await this.repo.updateRunStatus(id, 'aborted');
-    log.info({ runId: id }, 'Workflow run aborted');
-    return updated!;
-  }
-
-  // --- Reviews ---
-
-  async listPendingReviews(userId?: string): Promise<WorkflowReview[]> {
-    return this.repo.findPendingReviews(userId);
-  }
-
-  async getReview(runId: string, nodeId: string): Promise<WorkflowReview> {
-    const review = await this.repo.findReviewByRunAndNode(runId, nodeId);
-    if (!review) throw new NotFoundError('WorkflowReview', `${runId}/${nodeId}`);
-    return review;
-  }
-
-  async submitReviewDecision(
-    runId: string,
-    nodeId: string,
-    decision: ReviewDecision,
-    decidedBy: string,
-    comments?: string,
-  ): Promise<WorkflowReview> {
-    const review = await this.getReview(runId, nodeId);
-
-    if (review.status !== 'pending') {
-      throw new ValidationError(`Review is already in status '${review.status}'`);
-    }
-
-    const updated = await this.repo.updateReviewDecision(
-      review.id,
-      decision,
-      decidedBy,
-      comments,
-    );
-
-    log.info({ runId, nodeId, decision, decidedBy }, 'Review decision submitted');
-    return updated!;
-  }
-
-  async checkExpiredReviews(): Promise<WorkflowReview[]> {
-    const expired = await this.repo.findExpiredReviews();
-    const results: WorkflowReview[] = [];
-
-    for (const review of expired) {
-      const updated = await this.repo.updateReviewStatus(review.id, 'expired');
-      if (updated) {
-        results.push(updated);
-        log.info({ reviewId: review.id, runId: review.runId, nodeId: review.nodeId }, 'Review expired');
-      }
-    }
-
-    return results;
-  }
 }
 
-/**
- * Increment a semver-like version string.
- * "1.0.0" → "1.0.1", "1.0.9" → "1.0.10"
- */
 function incrementVersion(version: string): string {
   const parts = version.split('.').map(Number);
   if (parts.length !== 3 || parts.some(isNaN)) return '1.0.1';

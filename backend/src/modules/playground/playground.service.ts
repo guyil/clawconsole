@@ -3,7 +3,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { AppError, NotFoundError } from '../../shared/errors.js';
-import { buildAgent, streamAgent, buildToolSet } from '../../shared/langgraph/index.js';
+import {
+  buildAgent,
+  streamAgent,
+  buildToolSet,
+  closeBrowser,
+  getAgentConfig,
+} from '../../shared/langgraph/index.js';
+import { createBrowserTools } from '../../shared/langgraph/browser-tools.js';
 import type { StreamEvent, LangGraphToolDef } from '../../shared/langgraph/types.js';
 import { createChildLogger } from '../../shared/logger.js';
 import { PlaygroundRepository } from './playground.repository.js';
@@ -26,10 +33,13 @@ import type {
 
 const log = createChildLogger('playground-service');
 
+const simulatorCfg = getAgentConfig('playground-simulator');
+const optimizerCfg = getAgentConfig('playground-optimizer');
+
 const DEFAULT_CONFIG: PlaygroundSessionConfig = {
-  model: 'claude-sonnet-4-20250514',
-  maxToolCalls: 50,
-  timeoutSeconds: 300,
+  model: simulatorCfg.model,
+  maxToolCalls: simulatorCfg.maxToolCalls,
+  timeoutSeconds: simulatorCfg.timeoutSeconds,
   allowedTools: [],
 };
 
@@ -113,8 +123,8 @@ export class PlaygroundService {
     // Create sandbox directory
     const sandboxDir = await this.ensureSandbox(sessionId);
 
-    // Build tools first so we can list them in the prompt
-    const tools = buildToolSet(sandboxDir, session.config.allowedTools);
+    // Build tools first so we can list them in the prompt (sessionId enables browser tools)
+    const tools = buildToolSet(sandboxDir, session.config.allowedTools, sessionId);
 
     // Parse skill and build prompt with identity context + available tools
     const parsed = parseSkillMd(session.skillSnapshot);
@@ -123,6 +133,8 @@ export class PlaygroundService {
       model: session.config.model,
       systemPrompt,
       tools,
+      maxTokens: simulatorCfg.maxTokens,
+      temperature: simulatorCfg.temperature,
       maxToolCalls: session.config.maxToolCalls,
       timeoutMs: session.config.timeoutSeconds * 1000,
     });
@@ -139,7 +151,10 @@ export class PlaygroundService {
     let toolCallCount = 0;
 
     try {
-      for await (const event of streamAgent(agent, userMessage, existingMessages)) {
+      for await (const event of streamAgent(agent, userMessage, existingMessages, {
+        agentId: 'playground-simulator',
+        sessionId,
+      })) {
         yield event;
 
         if (event.type === 'text-delta') {
@@ -248,13 +263,18 @@ export class PlaygroundService {
     };
     await this.repo.appendOptimizerMessage(sessionId, userMsg);
 
-    const optimizerTools = this.buildOptimizerTools(sessionId);
+    const optimizerTools = [
+      ...this.buildOptimizerTools(sessionId),
+      ...createBrowserTools(`optimizer-${sessionId}`),
+    ];
     const systemPrompt = this.buildOptimizerSystemPrompt(session.skillFiles);
 
     const agent = buildAgent({
       model: session.config.model,
       systemPrompt,
       tools: optimizerTools,
+      maxTokens: optimizerCfg.maxTokens,
+      temperature: optimizerCfg.temperature,
       maxToolCalls: session.config.maxToolCalls,
       timeoutMs: session.config.timeoutSeconds * 1000,
     });
@@ -267,7 +287,10 @@ export class PlaygroundService {
     let assistantContent = '';
 
     try {
-      for await (const event of streamAgent(agent, userMessage, existingMessages)) {
+      for await (const event of streamAgent(agent, userMessage, existingMessages, {
+        agentId: 'playground-optimizer',
+        sessionId,
+      })) {
         yield event;
 
         if (event.type === 'text-delta') {
@@ -360,7 +383,7 @@ export class PlaygroundService {
         parts.push(`## ${file.filename}\n${file.content}\n`);
       }
     } else {
-      parts.push('You are a helpful AI assistant in the OpenClaw Playground.\n');
+      parts.push(simulatorCfg.systemPrompt + '\n');
     }
 
     // Layer 2: Available tools — critical for the agent to know what it can actually do
@@ -451,66 +474,16 @@ export class PlaygroundService {
     ];
   }
 
+  /**
+   * Composes the optimizer system prompt by appending the current skill
+   * files snapshot to the centralized base prompt.
+   */
   private buildOptimizerSystemPrompt(skillFiles: SkillFileMap): string {
-    const parts: string[] = [];
-    parts.push(`You are a **Skill Optimizer AI** — an expert at designing, improving, and debugging Claude Code skills (SKILL.md format).
-
-Your job is to help the user create high-quality, well-structured skills. You have tools to read and write files in the skill directory.
-
-## Skill Format (SKILL.md)
-
-A skill uses YAML frontmatter followed by markdown instructions:
-\`\`\`
----
-name: skill-name
-description: What this skill does and when to use it
-allowed-tools: tool1,tool2
----
-
-Instructions for the AI agent when this skill is active...
-\`\`\`
-
-### Frontmatter Fields
-- \`name\` (required): kebab-case identifier
-- \`description\` (required): when/how to invoke this skill
-- \`allowed-tools\`: comma-separated tool whitelist
-- \`disable-model-invocation\`: prevent sub-model calls
-- \`user-invocable\`: whether users can directly trigger this skill
-- \`context\`: additional context files
-- \`model\`: preferred model override
-- \`argument-hint\`: hint for argument parsing
-
-## Skill Directory Structure
-
-A skill can be a single SKILL.md or a directory:
-\`\`\`
-my-skill/
-├── SKILL.md           # Main instructions (required)
-├── reference.md       # Detailed reference documentation
-├── examples/
-│   └── sample.md      # Example inputs/outputs
-└── scripts/
-    └── helper.py      # Utility scripts
-\`\`\`
-
-## Current Skill Files
-`);
+    const parts: string[] = [optimizerCfg.systemPrompt, '\n## Current Skill Files\n'];
 
     for (const [filePath, content] of Object.entries(skillFiles)) {
       parts.push(`### ${filePath}\n\`\`\`\n${content}\n\`\`\``);
     }
-
-    parts.push(`
-## Guidelines
-
-1. **Be specific** — vague instructions produce inconsistent results
-2. **Use numbered steps** — sequential instructions are clearer
-3. **Define constraints** — state what the skill should NOT do
-4. **Add examples** — reference.md / examples/ help the agent understand expected behavior
-5. **Security** — avoid shell injection, eval, or dynamic code execution patterns
-6. **Iterate** — read the current files, suggest improvements, and apply them directly
-
-When making changes, always use \`write_skill_file\` to apply them directly. Explain your reasoning before writing.`);
 
     return parts.join('\n');
   }
@@ -527,14 +500,18 @@ When making changes, always use \`write_skill_file\` to apply them directly. Exp
 
   private async cleanupSandbox(sessionId: string): Promise<void> {
     const sandboxDir = activeSandboxes.get(sessionId);
-    if (!sandboxDir) return;
-
-    try {
-      await fs.rm(sandboxDir, { recursive: true, force: true });
-    } catch (err) {
-      log.warn({ err, sessionId }, 'Failed to clean up sandbox directory');
+    if (sandboxDir) {
+      try {
+        await fs.rm(sandboxDir, { recursive: true, force: true });
+      } catch (err) {
+        log.warn({ err, sessionId }, 'Failed to clean up sandbox directory');
+      }
+      activeSandboxes.delete(sessionId);
     }
-    activeSandboxes.delete(sessionId);
+
+    // Close browser instances for both simulator and optimizer
+    await closeBrowser(sessionId);
+    await closeBrowser(`optimizer-${sessionId}`);
   }
 }
 

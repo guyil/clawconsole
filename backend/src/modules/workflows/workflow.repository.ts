@@ -6,16 +6,7 @@ import type {
   UpdateWorkflowInput,
   WorkflowVersion,
   CreateVersionInput,
-  WorkflowRun,
-  UpsertRunInput,
-  WorkflowRunNode,
-  UpsertRunNodeInput,
-  WorkflowReview,
-  CreateReviewInput,
   WorkflowStatus,
-  WorkflowRunStatus,
-  ReviewStatus,
-  ReviewDecision,
 } from './workflow.types.js';
 
 function safeJsonParse<T>(value: unknown): T | null {
@@ -25,6 +16,18 @@ function safeJsonParse<T>(value: unknown): T | null {
     try { return JSON.parse(value) as T; } catch { return null; }
   }
   return null;
+}
+
+/**
+ * Derive a filesystem-safe key from a workflow name.
+ * Lowercases, replaces non-alphanumeric chars with hyphens, deduplicates.
+ */
+function deriveWorkflowKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    || 'workflow';
 }
 
 export class WorkflowRepository {
@@ -59,14 +62,23 @@ export class WorkflowRepository {
     return row ? this.toWorkflow(row) : null;
   }
 
+  async findByKey(workflowKey: string): Promise<Workflow | null> {
+    const row = await this.db('workflows')
+      .where('workflow_key', workflowKey)
+      .first();
+    return row ? this.toWorkflow(row) : null;
+  }
+
   async create(input: CreateWorkflowInput): Promise<Workflow> {
     const id = uuidv4();
     const now = new Date();
+    const workflowKey = input.workflowKey || deriveWorkflowKey(input.name);
 
     await this.db('workflows').insert({
       id,
       name: input.name,
       description: input.description ?? null,
+      workflow_key: workflowKey,
       machine_id: input.machineId,
       agent_id: input.agentId ?? null,
       status: 'draft',
@@ -135,187 +147,6 @@ export class WorkflowRepository {
     return (await this.findVersionById(id))!;
   }
 
-  // --- Workflow Runs ---
-
-  async findRuns(filters?: {
-    workflowId?: string;
-    machineId?: string;
-    status?: WorkflowRunStatus;
-  }): Promise<WorkflowRun[]> {
-    let query = this.db('workflow_runs').select('*');
-    if (filters?.workflowId) query = query.where('workflow_id', filters.workflowId);
-    if (filters?.machineId) query = query.where('machine_id', filters.machineId);
-    if (filters?.status) query = query.where('status', filters.status);
-    const rows = await query.orderBy('synced_at', 'desc');
-    return rows.map(this.toRun);
-  }
-
-  async findRunById(id: string): Promise<WorkflowRun | null> {
-    const row = await this.db('workflow_runs').where('id', id).first();
-    return row ? this.toRun(row) : null;
-  }
-
-  async findRunByRunId(runId: string): Promise<WorkflowRun | null> {
-    const row = await this.db('workflow_runs').where('run_id', runId).first();
-    return row ? this.toRun(row) : null;
-  }
-
-  async upsertRun(input: UpsertRunInput): Promise<WorkflowRun> {
-    const existing = await this.findRunByRunId(input.runId);
-    if (existing) {
-      await this.db('workflow_runs').where('id', existing.id).update({
-        status: input.status,
-        current_nodes: input.currentNodes ? JSON.stringify(input.currentNodes) : existing.currentNodes,
-        variables: input.variables ? JSON.stringify(input.variables) : undefined,
-        started_at: input.startedAt ?? undefined,
-        completed_at: input.completedAt ?? undefined,
-        error_message: input.errorMessage ?? undefined,
-        synced_at: new Date(),
-      });
-      return (await this.findRunById(existing.id))!;
-    }
-
-    const id = uuidv4();
-    await this.db('workflow_runs').insert({
-      id,
-      workflow_id: input.workflowId,
-      run_id: input.runId,
-      machine_id: input.machineId,
-      status: input.status,
-      trigger_info: input.triggerInfo ? JSON.stringify(input.triggerInfo) : null,
-      current_nodes: input.currentNodes ? JSON.stringify(input.currentNodes) : null,
-      variables: input.variables ? JSON.stringify(input.variables) : null,
-      started_at: input.startedAt ?? null,
-      completed_at: input.completedAt ?? null,
-      error_message: input.errorMessage ?? null,
-      synced_at: new Date(),
-    });
-    return (await this.findRunById(id))!;
-  }
-
-  async updateRunStatus(id: string, status: WorkflowRunStatus, errorMessage?: string): Promise<WorkflowRun | null> {
-    const updates: Record<string, unknown> = { status, synced_at: new Date() };
-    if (status === 'completed' || status === 'failed' || status === 'aborted') {
-      updates.completed_at = new Date();
-    }
-    if (errorMessage !== undefined) updates.error_message = errorMessage;
-
-    await this.db('workflow_runs').where('id', id).update(updates);
-    return this.findRunById(id);
-  }
-
-  // --- Workflow Run Nodes ---
-
-  async findRunNodes(runId: string): Promise<WorkflowRunNode[]> {
-    const rows = await this.db('workflow_run_nodes').where('run_id', runId);
-    return rows.map(this.toRunNode);
-  }
-
-  async upsertRunNode(input: UpsertRunNodeInput): Promise<WorkflowRunNode> {
-    const existing = await this.db('workflow_run_nodes')
-      .where({ run_id: input.runId, node_id: input.nodeId })
-      .first();
-
-    if (existing) {
-      await this.db('workflow_run_nodes').where('id', existing.id as string).update({
-        status: input.status,
-        input_json: input.inputJson ? JSON.stringify(input.inputJson) : undefined,
-        output_json: input.outputJson ? JSON.stringify(input.outputJson) : undefined,
-        started_at: input.startedAt ?? undefined,
-        completed_at: input.completedAt ?? undefined,
-        error_message: input.errorMessage ?? undefined,
-      });
-      const row = await this.db('workflow_run_nodes').where('id', existing.id as string).first();
-      return this.toRunNode(row!);
-    }
-
-    const id = uuidv4();
-    await this.db('workflow_run_nodes').insert({
-      id,
-      run_id: input.runId,
-      node_id: input.nodeId,
-      node_type: input.nodeType,
-      status: input.status,
-      input_json: input.inputJson ? JSON.stringify(input.inputJson) : null,
-      output_json: input.outputJson ? JSON.stringify(input.outputJson) : null,
-      started_at: input.startedAt ?? null,
-      completed_at: input.completedAt ?? null,
-      error_message: input.errorMessage ?? null,
-    });
-    const row = await this.db('workflow_run_nodes').where('id', id).first();
-    return this.toRunNode(row!);
-  }
-
-  // --- Reviews ---
-
-  async findPendingReviews(decidedBy?: string): Promise<WorkflowReview[]> {
-    let query = this.db('workflow_reviews').where('status', 'pending');
-    if (decidedBy) {
-      // Filter by reviewers containing the user (JSON search)
-      query = query.whereRaw("JSON_SEARCH(reviewers, 'one', ?) IS NOT NULL", [decidedBy]);
-    }
-    const rows = await query.orderBy('created_at', 'asc');
-    return rows.map(this.toReview);
-  }
-
-  async findReviewByRunAndNode(runId: string, nodeId: string): Promise<WorkflowReview | null> {
-    const row = await this.db('workflow_reviews')
-      .where({ run_id: runId, node_id: nodeId })
-      .first();
-    return row ? this.toReview(row) : null;
-  }
-
-  async findReviewById(id: string): Promise<WorkflowReview | null> {
-    const row = await this.db('workflow_reviews').where('id', id).first();
-    return row ? this.toReview(row) : null;
-  }
-
-  async createReview(input: CreateReviewInput): Promise<WorkflowReview> {
-    const id = uuidv4();
-    await this.db('workflow_reviews').insert({
-      id,
-      run_id: input.runId,
-      node_id: input.nodeId,
-      status: 'pending',
-      reviewers: JSON.stringify(input.reviewers),
-      policy: input.policy,
-      payload: input.payload ? JSON.stringify(input.payload) : null,
-      timeout_at: input.timeoutAt ?? null,
-      created_at: new Date(),
-    });
-    return (await this.findReviewById(id))!;
-  }
-
-  async updateReviewDecision(
-    id: string,
-    decision: ReviewDecision,
-    decidedBy: string,
-    comments?: string,
-  ): Promise<WorkflowReview | null> {
-    const status: ReviewStatus = decision;
-    await this.db('workflow_reviews').where('id', id).update({
-      status,
-      decision,
-      decided_by: decidedBy,
-      comments: comments ?? null,
-      decided_at: new Date(),
-    });
-    return this.findReviewById(id);
-  }
-
-  async updateReviewStatus(id: string, status: ReviewStatus): Promise<WorkflowReview | null> {
-    await this.db('workflow_reviews').where('id', id).update({ status });
-    return this.findReviewById(id);
-  }
-
-  async findExpiredReviews(): Promise<WorkflowReview[]> {
-    const rows = await this.db('workflow_reviews')
-      .where('status', 'pending')
-      .whereNotNull('timeout_at')
-      .where('timeout_at', '<', new Date());
-    return rows.map(this.toReview);
-  }
-
   // --- Mappers ---
 
   private toWorkflow(row: Record<string, unknown>): Workflow {
@@ -323,6 +154,7 @@ export class WorkflowRepository {
       id: row.id as string,
       name: row.name as string,
       description: row.description as string | null,
+      workflowKey: (row.workflow_key as string) || '',
       machineId: row.machine_id as string,
       agentId: row.agent_id as string | null,
       status: row.status as WorkflowStatus,
@@ -348,56 +180,6 @@ export class WorkflowRepository {
       snapshotJson: safeJsonParse(row.snapshot_json) ?? {},
       changeLog: row.change_log as string | null,
       createdBy: row.created_by as string,
-      createdAt: new Date(row.created_at as string),
-    };
-  }
-
-  private toRun(row: Record<string, unknown>): WorkflowRun {
-    return {
-      id: row.id as string,
-      workflowId: row.workflow_id as string,
-      runId: row.run_id as string,
-      machineId: row.machine_id as string,
-      status: row.status as WorkflowRunStatus,
-      triggerInfo: safeJsonParse(row.trigger_info),
-      currentNodes: safeJsonParse(row.current_nodes),
-      variables: safeJsonParse(row.variables),
-      startedAt: row.started_at ? new Date(row.started_at as string) : null,
-      completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-      errorMessage: row.error_message as string | null,
-      syncedAt: new Date(row.synced_at as string),
-    };
-  }
-
-  private toRunNode(row: Record<string, unknown>): WorkflowRunNode {
-    return {
-      id: row.id as string,
-      runId: row.run_id as string,
-      nodeId: row.node_id as string,
-      nodeType: row.node_type as 'skill' | 'review' | 'condition',
-      status: row.status as RunNodeStatus,
-      inputJson: safeJsonParse(row.input_json),
-      outputJson: safeJsonParse(row.output_json),
-      startedAt: row.started_at ? new Date(row.started_at as string) : null,
-      completedAt: row.completed_at ? new Date(row.completed_at as string) : null,
-      errorMessage: row.error_message as string | null,
-    };
-  }
-
-  private toReview(row: Record<string, unknown>): WorkflowReview {
-    return {
-      id: row.id as string,
-      runId: row.run_id as string,
-      nodeId: row.node_id as string,
-      status: row.status as ReviewStatus,
-      reviewers: safeJsonParse(row.reviewers) ?? [],
-      policy: row.policy as string,
-      payload: safeJsonParse(row.payload),
-      timeoutAt: row.timeout_at ? new Date(row.timeout_at as string) : null,
-      decision: row.decision as ReviewDecision | null,
-      decidedBy: row.decided_by as string | null,
-      comments: row.comments as string | null,
-      decidedAt: row.decided_at ? new Date(row.decided_at as string) : null,
       createdAt: new Date(row.created_at as string),
     };
   }

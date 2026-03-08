@@ -4,7 +4,11 @@ import { config } from './config/index.js';
 import { createChildLogger } from './shared/logger.js';
 import { getDb, closeDb } from './shared/db.js';
 import { getRedis, closeRedis } from './shared/redis.js';
+import { closeAllBrowsers, initTracing, getAllAgentConfigs } from './shared/langgraph/index.js';
 import { AppError } from './shared/errors.js';
+
+// Initialize LangSmith tracing before any LLM calls
+initTracing();
 
 import { SSHPool } from './transport/ssh-pool.js';
 import { SSHExecutor } from './transport/ssh-executor.js';
@@ -61,6 +65,10 @@ import {
   emitDiagnosticEventToClient,
 } from './websocket/sync-events.js';
 
+import { PlatformSkillRegistry, allPlatformSkills } from './shared/platform-skills/index.js';
+import { classifyMemoryFile, type MemoryFileRecord } from './shared/memory-classifier.js';
+import { hashContent } from './shared/crypto.js';
+
 import { setupRecurringJobs, createWorker } from './jobs/queue.js';
 import { createHealthCheckHandler } from './jobs/health-check.job.js';
 import { createAutoPullHandler } from './jobs/auto-pull.job.js';
@@ -69,6 +77,24 @@ import { createSessionSyncHandler } from './jobs/session-sync.job.js';
 import { createLogCollectorHandler } from './jobs/log-collector.job.js';
 
 const log = createChildLogger('server');
+
+function groupMemoryFiles(records: MemoryFileRecord[]) {
+  const core: MemoryFileRecord[] = [];
+  const daily: MemoryFileRecord[] = [];
+  const sessionSnapshots: MemoryFileRecord[] = [];
+
+  for (const r of records) {
+    if (r.category === 'core') core.push(r);
+    else if (r.category === 'daily') daily.push(r);
+    else sessionSnapshots.push(r);
+  }
+
+  return {
+    data: { core, daily, sessionSnapshots },
+    totalFiles: records.length,
+    lastSyncedAt: records[0]?.updatedAt?.toISOString() ?? null,
+  };
+}
 
 async function main() {
   const fastify = Fastify({
@@ -111,9 +137,13 @@ async function main() {
   const credentialService = new CredentialService(credentialRepo, fileTransfer, machineService);
   const skillService = new SkillService(skillRepo, fileTransfer, machineService, agentRepo);
 
+  // --- Platform Skills Registry ---
+  const platformSkills = new PlatformSkillRegistry({ sshPool, machineService, machineRepo, agentRepo });
+  platformSkills.registerAll(allPlatformSkills);
+
   // --- Workflows ---
   const workflowRepo = new WorkflowRepository();
-  const workflowService = new WorkflowService(workflowRepo, skillRepo);
+  const workflowService = new WorkflowService(workflowRepo, skillRepo, machineService, agentRepo, fileTransfer);
 
   // --- Monitoring ---
   const gatewayPool = new GatewayConnectorPool();
@@ -174,6 +204,7 @@ async function main() {
     agentRepo,
     syncRepo,
     sshPool,
+    platformSkills,
   });
 
   // --- Routes ---
@@ -225,6 +256,15 @@ async function main() {
 
     const existing = await agentRepo.findByMachineAndAgentId(machineId, body.agentId);
     if (existing) {
+      // Allow retry: reuse a draft/failed agent record instead of rejecting
+      if (existing.status === 'draft' || existing.status === 'packaging') {
+        const updated = await agentRepo.update(existing.id, {
+          name: body.name,
+          description: body.description,
+          status: 'draft',
+        });
+        return reply.status(200).send(updated);
+      }
       throw new AppError(`Agent "${body.agentId}" already exists on this machine`, 'CONFLICT', 409);
     }
 
@@ -296,6 +336,20 @@ async function main() {
         try {
           const content = await fileTransfer.downloadFile(connInfo, `${absBasePath}/${filename}`);
           results.push({ filename, content });
+
+          // Write-through: persist to DB cache so subsequent requests avoid SSH
+          const contentHash = hashContent(content);
+          await fileRepo.upsertFile({
+            machineId: machine.id,
+            relativePath: `${workspace}/${filename}`,
+            content,
+            contentHash,
+            remoteHash: contentHash,
+            remoteMtime: null,
+            remoteSize: content.length,
+            localDirty: false,
+            remoteDirty: false,
+          });
         } catch {
           log.warn({ agentId, filename }, 'Failed to download config file');
         }
@@ -313,6 +367,349 @@ async function main() {
         };
       }
       throw err;
+    }
+  });
+
+  // --- Re-discover skills for an agent's machine ---
+  fastify.post('/api/agents/:agentId/rediscover-skills', async (request) => {
+    const { agentId } = request.params as { agentId: string };
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+
+    const discovery = await machineService.discoverStructure(agent.machineId);
+
+    const freshAgent = await agentRepo.findById(agentId);
+    const machine = await machineRepo.findById(agent.machineId);
+
+    return {
+      globalSkills: machine?.discoveredSkills ?? [],
+      agentSkills: freshAgent?.discoveredSkills ?? [],
+      discovery,
+    };
+  });
+
+  // --- Remove discovered skills (agent-level and machine-level) ---
+
+  fastify.delete('/api/agents/:agentId/discovered-skills/:skillKey', async (request, reply) => {
+    const { agentId, skillKey } = request.params as { agentId: string; skillKey: string };
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+
+    const currentSkills = agent.discoveredSkills ?? [];
+    if (!currentSkills.includes(skillKey)) {
+      throw new AppError(`Skill "${skillKey}" not found on this agent`, 'NOT_FOUND', 404);
+    }
+
+    const machine = await machineRepo.findById(agent.machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    const workspace = agent.workspacePath ?? 'workspace';
+    const skillDir = `${machine.openclawHome}/${workspace}/skills/${skillKey}`;
+    const connInfo = machineService.toConnectionInfo(machine);
+
+    await sshPool.executeCommand(connInfo, `rm -rf ${skillDir}`, { timeoutMs: 15_000 });
+
+    const updatedSkills = currentSkills.filter((s) => s !== skillKey);
+    await agentRepo.updateDiscoveredSkills(agent.id, updatedSkills);
+
+    log.info({ agentId, skillKey, skillDir }, 'Agent discovered skill removed');
+    return reply.status(204).send();
+  });
+
+  fastify.delete('/api/agents/:agentId/global-skills/:skillKey', async (request, reply) => {
+    const { agentId, skillKey } = request.params as { agentId: string; skillKey: string };
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+
+    const machine = await machineRepo.findById(agent.machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    const globalSkills = machine.discoveredSkills ?? [];
+    if (!globalSkills.includes(skillKey)) {
+      throw new AppError(`Global skill "${skillKey}" not found on this machine`, 'NOT_FOUND', 404);
+    }
+
+    const skillDir = `${machine.openclawHome}/skills/${skillKey}`;
+    const connInfo = machineService.toConnectionInfo(machine);
+
+    await sshPool.executeCommand(connInfo, `rm -rf ${skillDir}`, { timeoutMs: 15_000 });
+
+    const updatedSkills = globalSkills.filter((s) => s !== skillKey);
+    await machineRepo.updateDiscoveredSkills(machine.id, updatedSkills);
+
+    log.info({ agentId, machineId: machine.id, skillKey, skillDir }, 'Global discovered skill removed');
+    return reply.status(204).send();
+  });
+
+  // --- Memory files endpoint ---
+  // Uses two SSH calls: one for root memory files, one for memory/ subdirectory.
+  // Each follows the exact same pattern as config-files (which is proven to work).
+  fastify.get('/api/agents/:agentId/memory-files', async (request) => {
+    const { agentId } = request.params as { agentId: string };
+    const query = request.query as Record<string, string>;
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+
+    const machine = await machineRepo.findById(agent.machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    const workspace = agent.workspacePath ?? 'workspace';
+    const emptyResult = { data: { core: [], daily: [], sessionSnapshots: [] }, totalFiles: 0, lastSyncedAt: null };
+
+    // Try DB cache first
+    const cached = await fileRepo.findMemoryFilesByAgent(machine.id, workspace);
+    if (cached.length > 0 && query.refresh !== 'true') {
+      return groupMemoryFiles(cached);
+    }
+
+    // SSH fallback with request-level timeout (20s) to avoid hanging when
+    // SSH pool is contended by background jobs
+    const REQUEST_TIMEOUT_MS = 20_000;
+
+    const fetchViaSSH = async () => {
+      const connInfo = machineService.toConnectionInfo(machine);
+      const wsDir = `${machine.openclawHome}/${workspace}`;
+      const results: Array<{ filename: string; relativePath: string; content: string }> = [];
+
+      // Step 1: List root-level memory files (same pattern as config-files)
+      const { stdout: rootStdout } = await sshPool.executeCommand(
+        connInfo,
+        `cd ${wsDir} && pwd && ls -1 MEMORY.md memory.md 2>/dev/null`,
+        { timeoutMs: 10_000 },
+      );
+      const rootLines = rootStdout.split('\n').filter(Boolean);
+      const rootBasePath = rootLines[0] ?? '';
+      const rootFiles = rootLines.slice(1);
+
+      for (const filename of rootFiles) {
+        try {
+          const content = await fileTransfer.downloadFile(connInfo, `${rootBasePath}/${filename}`);
+          results.push({ filename, relativePath: filename, content });
+
+          const contentHash = hashContent(content);
+          await fileRepo.upsertFile({
+            machineId: machine.id,
+            relativePath: `${workspace}/${filename}`,
+            content,
+            contentHash,
+            remoteHash: contentHash,
+            remoteMtime: null,
+            remoteSize: content.length,
+            localDirty: false,
+            remoteDirty: false,
+          });
+        } catch {
+          log.warn({ agentId, filename }, 'Failed to download root memory file');
+        }
+      }
+
+      // Step 2: List memory/ directory files
+      try {
+        const { stdout: memStdout } = await sshPool.executeCommand(
+          connInfo,
+          `cd ${wsDir}/memory && pwd && ls -1 *.md 2>/dev/null`,
+          { timeoutMs: 10_000 },
+        );
+        const memLines = memStdout.split('\n').filter(Boolean);
+        const memBasePath = memLines[0] ?? '';
+        const memFiles = memLines.slice(1);
+
+        for (const filename of memFiles) {
+          try {
+            const content = await fileTransfer.downloadFile(connInfo, `${memBasePath}/${filename}`);
+            results.push({
+              filename,
+              relativePath: `memory/${filename}`,
+              content,
+            });
+
+            const contentHash = hashContent(content);
+            await fileRepo.upsertFile({
+              machineId: machine.id,
+              relativePath: `${workspace}/memory/${filename}`,
+              content,
+              contentHash,
+              remoteHash: contentHash,
+              remoteMtime: null,
+              remoteSize: content.length,
+              localDirty: false,
+              remoteDirty: false,
+            });
+          } catch {
+            log.warn({ agentId, filename }, 'Failed to download memory dir file');
+          }
+        }
+      } catch {
+        log.debug({ agentId }, 'No memory/ directory or not accessible');
+      }
+
+      if (results.length === 0) return emptyResult;
+
+      const records = results.map((r, i) => ({
+        id: `ssh-${i}`,
+        relativePath: r.relativePath,
+        filename: r.filename,
+        content: r.content,
+        category: classifyMemoryFile(r.relativePath),
+        mtime: null as number | null,
+        size: r.content.length,
+        updatedAt: new Date(),
+      }));
+
+      return groupMemoryFiles(records);
+    };
+
+    try {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Memory files request timeout')), REQUEST_TIMEOUT_MS),
+      );
+      return await Promise.race([fetchViaSSH(), timeout]);
+    } catch (err) {
+      if (cached.length > 0) {
+        log.warn({ agentId, err }, 'SSH refresh failed, returning cached memory files');
+        return { ...groupMemoryFiles(cached), stale: true };
+      }
+      log.warn({ agentId, err }, 'Memory files fetch timed out or failed');
+      return emptyResult;
+    }
+  });
+
+  // --- Provision endpoint (SSE for bot deployment progress) ---
+  fastify.post('/api/agents/:agentId/provision', async (request, reply) => {
+    const { agentId } = request.params as { agentId: string };
+    const body = request.body as {
+      channels?: Array<{
+        channelType: string;
+        accountId: string;
+        token?: string;
+        signingSecret?: string;
+        encryptKey?: string;
+      }>;
+    };
+
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+    const provisionableStatuses = ['draft', 'packaging', 'offline'];
+    if (!provisionableStatuses.includes(agent.status)) {
+      throw new AppError(
+        `Agent must be in draft/packaging/offline status to provision (current: ${agent.status})`,
+        'VALIDATION_ERROR',
+        400,
+      );
+    }
+
+    const machine = await machineRepo.findById(agent.machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+
+    const sendEvent = (step: string, status: string, message: string, detail?: string) => {
+      const data = JSON.stringify({ step, status, message, detail });
+      reply.raw.write(`data: ${data}\n\n`);
+    };
+
+    // Safely parse a skill result string; returns { success: false } for
+    // plain error strings that aren't valid JSON.
+    const parseSkillResult = (raw: string): { success: boolean; [k: string]: unknown } => {
+      if (raw.startsWith('Error')) return { success: false, message: raw };
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return { success: false, message: raw };
+      }
+    };
+
+    try {
+      // Step 1: Create agent on remote machine (skip for default agents — they already exist)
+      if (agent.isDefault) {
+        sendEvent('create_agent', 'success', 'Default agent already exists on remote machine, skipping creation');
+        await agentRepo.update(agentId, { status: 'packaging' });
+      } else {
+        sendEvent('create_agent', 'running', 'Creating agent on remote machine...');
+        const createResult = await platformSkills.get('create_agent_on_node')!
+          .handler({
+            machineId: agent.machineId,
+            agentId: agent.agentId,
+            dbRecordId: agent.id,
+            workspace: agent.workspacePath ?? `workspace-${agent.agentId}`,
+          }, platformSkills.getContext());
+        const createParsed = parseSkillResult(createResult);
+        if (!createParsed.success) {
+          sendEvent('create_agent', 'error', String(createParsed.message ?? createResult));
+          await agentRepo.update(agentId, { status: 'draft' }).catch(() => {});
+          reply.raw.end();
+          return;
+        }
+        sendEvent('create_agent', 'success', 'Agent created on remote machine');
+      }
+
+      // Step 2: Configure channels (if any)
+      const channels = body.channels ?? [];
+      for (const ch of channels) {
+        sendEvent('configure_channel', 'running', `Configuring ${ch.channelType}:${ch.accountId}...`);
+        const chResult = await platformSkills.get('configure_channel')!
+          .handler({
+            machineId: agent.machineId,
+            channelType: ch.channelType,
+            accountId: ch.accountId,
+            token: ch.token,
+            signingSecret: ch.signingSecret,
+            encryptKey: ch.encryptKey,
+          }, platformSkills.getContext());
+        const chParsed = parseSkillResult(chResult);
+        if (!chParsed.success && !chParsed.requiresInteractiveSetup) {
+          sendEvent('configure_channel', 'error', String(chParsed.message ?? chResult));
+          continue;
+        }
+        sendEvent('configure_channel', 'success', `Channel ${ch.channelType}:${ch.accountId} configured`);
+
+        // Step 3: Bind channel to agent (skip for interactive-only channels)
+        if (!chParsed.requiresInteractiveSetup) {
+          sendEvent('bind_channel', 'running', `Binding ${ch.channelType}:${ch.accountId} to agent...`);
+          const bindResult = await platformSkills.get('bind_channel_to_agent')!
+            .handler({
+              machineId: agent.machineId,
+              agentId: agent.agentId,
+              bindings: `${ch.channelType}:${ch.accountId}`,
+            }, platformSkills.getContext());
+          const bindParsed = parseSkillResult(bindResult);
+          if (!bindParsed.success) {
+            sendEvent('bind_channel', 'error', String(bindParsed.message ?? bindResult));
+          } else {
+            sendEvent('bind_channel', 'success', `Channel bound to agent`);
+          }
+        }
+      }
+
+      // Step 4: Deploy agent
+      sendEvent('deploy', 'running', 'Deploying agent and restarting gateway...');
+      const deployResult = await platformSkills.get('deploy_agent')!
+        .handler({
+          machineId: agent.machineId,
+          agentId: agent.agentId,
+          dbRecordId: agent.id,
+          identityName: agent.name || agent.agentId,
+        }, platformSkills.getContext());
+      const deployParsed = parseSkillResult(deployResult);
+      if (!deployParsed.success) {
+        sendEvent('deploy', 'error', String(deployParsed.message ?? deployResult));
+        await agentRepo.update(agentId, { status: 'draft' }).catch(() => {});
+        reply.raw.end();
+        return;
+      }
+      sendEvent('deploy', 'success', 'Agent deployed successfully');
+
+      sendEvent('done', 'success', 'Provisioning complete');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      sendEvent('error', 'error', message);
+      await agentRepo.update(agentId, { status: 'draft' }).catch(() => {});
+    } finally {
+      reply.raw.end();
     }
   });
 
@@ -354,6 +751,26 @@ async function main() {
   createWorker('session-sync', createSessionSyncHandler(monitoringService), { concurrency: 1 });
   createWorker('log-collector', createLogCollectorHandler(monitoringService), { concurrency: 1 });
 
+  // --- Agent Config endpoint (centralized agent registry) ---
+  fastify.get('/api/agent-configs', async () => {
+    const configs = getAllAgentConfigs().map(({ systemPrompt, ...rest }) => ({
+      ...rest,
+      systemPromptLength: systemPrompt.length,
+    }));
+    return { data: configs, total: configs.length };
+  });
+
+  fastify.get('/api/agent-configs/:agentConfigId', async (request) => {
+    const { agentConfigId } = request.params as { agentConfigId: string };
+    try {
+      const { getAgentConfig } = await import('./shared/langgraph/agent-config.js');
+      const cfg = getAgentConfig(agentConfigId as any);
+      return cfg;
+    } catch {
+      throw new AppError('Agent config not found', 'NOT_FOUND', 404);
+    }
+  });
+
   // --- Health endpoint ---
   fastify.get('/api/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() };
@@ -380,6 +797,7 @@ async function main() {
   const shutdown = async () => {
     log.info('Shutting down...');
     gatewayPool.destroy();
+    await closeAllBrowsers();
     await fastify.close();
     await sshPool.destroy();
     await closeRedis();

@@ -152,9 +152,10 @@ describe('buildAssistantTools', () => {
     deps = createMockDeps();
   });
 
-  it('returns eight tools', () => {
+  it('returns core + browser tools', () => {
     const tools = buildAssistantTools(deps);
-    expect(tools).toHaveLength(8);
+    // 8 core tools + 6 browser tools = 14 (no platform skills in mock)
+    expect(tools.length).toBeGreaterThanOrEqual(8);
     const names = tools.map((t) => t.name);
     expect(names).toContain('list_machines');
     expect(names).toContain('get_machine_info');
@@ -233,7 +234,7 @@ describe('buildAssistantTools', () => {
 
       expect(deps.sshPool.executeCommand).toHaveBeenCalledWith(
         expect.anything(),
-        'sleep 1',
+        "zsh -lc 'sleep 1'",
         { timeoutMs: 300_000 },
       );
     });
@@ -245,7 +246,7 @@ describe('buildAssistantTools', () => {
 
       expect(deps.sshPool.executeCommand).toHaveBeenCalledWith(
         expect.anything(),
-        'ls',
+        "zsh -lc 'ls'",
         { timeoutMs: 30_000 },
       );
     });

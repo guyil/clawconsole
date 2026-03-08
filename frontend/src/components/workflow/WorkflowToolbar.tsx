@@ -29,7 +29,6 @@ interface WorkflowToolbarProps {
   onVersions: () => void;
   saving?: boolean;
   validating?: boolean;
-  deploying?: boolean;
   validation?: ValidationResult | null;
   hasChanges?: boolean;
 }
@@ -44,7 +43,6 @@ export function WorkflowToolbar({
   onVersions,
   saving,
   validating,
-  deploying,
   validation,
   hasChanges,
 }: WorkflowToolbarProps) {
@@ -119,8 +117,6 @@ export function WorkflowToolbar({
           size="sm"
           icon={<Rocket size={14} />}
           onClick={onDeploy}
-          loading={deploying}
-          disabled={status === 'active'}
         >
           部署
         </Button>

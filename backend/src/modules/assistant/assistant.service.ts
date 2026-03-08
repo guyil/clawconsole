@@ -1,9 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
-import { buildAgent, streamAgent } from '../../shared/langgraph/index.js';
+import { buildAgent, streamAgent, closeBrowser, getAgentConfig } from '../../shared/langgraph/index.js';
 import type { StreamEvent } from '../../shared/langgraph/types.js';
 import { createChildLogger } from '../../shared/logger.js';
 import { NotFoundError } from '../../shared/errors.js';
-import { config } from '../../config/index.js';
 import { AssistantRepository } from './assistant.repository.js';
 import { buildAssistantTools, type AssistantToolDeps } from './assistant.tools.js';
 import type {
@@ -15,34 +14,7 @@ import type {
 
 const log = createChildLogger('assistant-service');
 
-const SYSTEM_PROMPT = `You are an AI operations assistant for the ClawConsole platform — an enterprise management console for OpenClaw AI Agents deployed across multiple machines connected via Tailscale.
-
-## Your Capabilities
-
-You can:
-1. **Query cluster state** — list machines, agents, sync history, and run health checks
-2. **Execute SSH commands** — run any shell command on any managed machine
-3. **Fetch web content** — download scripts or check endpoints
-
-## Workflow Guidelines
-
-1. **Discover first**: If the user doesn't specify which machine to operate on, use \`list_machines\` to see what's available, then ask or infer the target.
-2. **Explain before acting**: Briefly describe what command you plan to run and why before executing SSH commands.
-3. **Report results clearly**: Show command output in a readable format. Summarize success/failure.
-4. **Handle errors gracefully**: If a command fails, explain what went wrong and suggest alternatives.
-5. **Chain commands when needed**: For multi-step tasks (e.g., install a package), run commands sequentially and check each result.
-
-## Safety Notes
-
-- You have unrestricted SSH access. Exercise care with destructive commands (rm -rf, reboot, etc.).
-- For package installation, prefer the system's package manager (apt, yum, brew, etc.).
-- When modifying system services, check current status before making changes.
-
-## Context
-
-You are operating within ClawConsole which manages OpenClaw AI agents. Each machine runs OpenClaw with config files under \`~/.openclaw/\`. The machines are connected via Tailscale WireGuard tunnels.
-
-Respond in the same language as the user's message.`;
+const agentCfg = getAgentConfig('assistant');
 
 export class AssistantService {
   private toolDeps: AssistantToolDeps;
@@ -73,6 +45,7 @@ export class AssistantService {
   async deleteSession(id: string): Promise<void> {
     const deleted = await this.repo.deleteSession(id);
     if (!deleted) throw new NotFoundError('AssistantSession', id);
+    await closeBrowser(`assistant-${id}`);
   }
 
   async *chat(sessionId: string, userMessage: string): AsyncGenerator<StreamEvent> {
@@ -92,11 +65,13 @@ export class AssistantService {
       await this.repo.updateTitle(sessionId, title);
     }
 
-    const tools = buildAssistantTools(this.toolDeps);
+    const tools = buildAssistantTools(this.toolDeps, `assistant-${sessionId}`);
     const agent = buildAgent({
-      model: config.playground.defaultModel,
-      systemPrompt: SYSTEM_PROMPT,
+      model: agentCfg.model,
+      systemPrompt: agentCfg.systemPrompt,
       tools,
+      maxTokens: agentCfg.maxTokens,
+      temperature: agentCfg.temperature,
     });
 
     const existingMessages = session.messages.map((m) => ({
@@ -108,7 +83,10 @@ export class AssistantService {
     const toolCallStarts = new Map<string, number>();
 
     try {
-      for await (const event of streamAgent(agent, userMessage, existingMessages)) {
+      for await (const event of streamAgent(agent, userMessage, existingMessages, {
+        agentId: 'assistant',
+        sessionId,
+      })) {
         yield event;
 
         if (event.type === 'text-delta') {

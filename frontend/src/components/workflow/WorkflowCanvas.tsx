@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Puzzle, UserCheck, GitBranch, ArrowDown } from 'lucide-react';
 import { NodeCard } from './NodeCard';
-import type { WorkflowNodeDef, WorkflowEdgeDef, RunNodeStatus } from '../../types/workflow';
+import type { WorkflowNodeDef, WorkflowEdgeDef } from '../../types/workflow';
 
 interface WorkflowCanvasProps {
   nodes: WorkflowNodeDef[];
@@ -11,7 +11,6 @@ interface WorkflowCanvasProps {
   onDeleteNode?: (id: string) => void;
   onAddNode?: (type: 'skill' | 'review' | 'condition', afterNodeId?: string) => void;
   readOnly?: boolean;
-  nodeStatuses?: Record<string, RunNodeStatus>;
   validationErrors?: Record<string, string>;
 }
 
@@ -29,7 +28,6 @@ export function WorkflowCanvas({
   onDeleteNode,
   onAddNode,
   readOnly,
-  nodeStatuses,
   validationErrors,
 }: WorkflowCanvasProps) {
   const [addMenuAt, setAddMenuAt] = useState<string | null>(null);
@@ -82,7 +80,6 @@ export function WorkflowCanvas({
               onClick={() => onSelectNode(selectedNodeId === node.id ? null : node.id)}
               onDelete={!readOnly && onDeleteNode ? () => onDeleteNode(node.id) : undefined}
               readOnly={readOnly}
-              runStatus={nodeStatuses?.[node.id]}
               error={validationErrors?.[node.id]}
             />
           </div>

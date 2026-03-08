@@ -41,8 +41,6 @@ const RUNTIME_OBSERVABLE_PATTERNS: RegExp[] = [
   /^delivery-queue\/.+/,
   /^feishu\/.+/,
   /^devices\/.+/,
-  /^workflow-runs\/.+/,
-  /^workflow-reviews\/[^/]+\/[^/]+\.request\.json$/,
 ];
 
 const CONSOLE_MANAGED_PATTERNS: RegExp[] = [
@@ -54,8 +52,8 @@ const CONSOLE_MANAGED_PATTERNS: RegExp[] = [
   /^hooks\/.+/,
   /^cron\/jobs\.json$/,
   /^credentials\/.+\.json$/,
-  /^workflows\/[^/]+\.yaml$/,
-  /^workflow-reviews\/[^/]+\/[^/]+\.response\.json$/,
+  /^workflows\/[^/]+\.lobster$/,
+  /^workspace(-[^/]+)?\/workflows\/[^/]+\.lobster$/,
 ];
 
 export function classifyFile(relativePath: string): FileCategory {
@@ -79,7 +77,7 @@ export function detectFileType(relativePath: string): FileType {
   if (/^logs\//.test(normalized)) return 'log';
   if (/\/sessions\//.test(normalized) || /^agents\//.test(normalized)) return 'session';
   if (/\/memory\//.test(normalized) || /^memory\//.test(normalized)) return 'memory';
-  if (/^workflows\//.test(normalized) || /^workflow-runs\//.test(normalized) || /^workflow-reviews\//.test(normalized)) return 'workflow';
+  if (/^workflows\//.test(normalized) || /\/workflows\//.test(normalized)) return 'workflow';
   if (/\/config\//.test(normalized)) return 'config';
   return 'other';
 }

@@ -8,56 +8,46 @@ function makeWorkflow(overrides: Partial<Workflow> = {}): Workflow {
     id: 'wf-1',
     name: 'content-pipeline',
     description: 'AI content generation pipeline',
+    workflowKey: 'content-pipeline',
     machineId: 'machine-1',
     agentId: null,
     status: 'active',
     version: '1.2.0',
-    triggerConfig: {
-      type: 'message',
-      channel: 'feishu',
-      pattern: '/publish *',
-    },
+    triggerConfig: { type: 'manual' },
     nodes: [
       {
-        id: 'draft',
+        id: 'collect',
         type: 'skill',
-        name: 'Generate Draft',
-        skillRef: 'content-writer',
-        input: { topic: '{{ trigger.message }}' },
-        output: 'draft_result',
-        timeout: '5m',
+        name: 'Collect Data',
+        command: 'inbox list --json',
       },
       {
-        id: 'review',
+        id: 'categorize',
+        type: 'skill',
+        name: 'Categorize',
+        command: 'inbox categorize --json',
+        stdin: '$collect.stdout',
+      },
+      {
+        id: 'approve',
         type: 'review',
-        name: 'Manager Review',
-        reviewers: [{ role: 'content_manager' }],
-        policy: 'any',
-        timeout: '2h',
-        escalation: {
-          action: 'notify',
-          target: [{ role: 'admin' }],
-          message: 'Review timed out',
-        },
-        payload: { title: 'Review content' },
+        name: 'Manager Approval',
+        prompt: 'Please review the categorization results',
       },
       {
-        id: 'gate',
-        type: 'condition',
-        name: 'Quality Gate',
-        expression: '{{ nodes.draft.output.score > 0.8 }}',
-        branches: [
-          { condition: 'true', target: 'publish' },
-          { condition: 'false', target: 'revise' },
-        ],
-        default: 'revise',
+        id: 'execute',
+        type: 'skill',
+        name: 'Execute',
+        command: 'inbox apply --execute',
+        stdin: '$categorize.stdout',
       },
     ],
     edges: [
-      { source: 'draft', target: 'review' },
-      { source: 'review', target: 'gate' },
+      { source: 'collect', target: 'categorize' },
+      { source: 'categorize', target: 'approve' },
+      { source: 'approve', target: 'execute' },
     ],
-    variables: { topic: '{{ trigger.message }}', threshold: 0.8 },
+    variables: { tag: 'family' },
     canvasState: null,
     createdBy: 'admin',
     updatedBy: null,
@@ -68,182 +58,146 @@ function makeWorkflow(overrides: Partial<Workflow> = {}): Workflow {
   };
 }
 
-describe('generateWorkflowYaml', () => {
-  it('generates valid YAML with correct apiVersion', () => {
+describe('generateWorkflowYaml (Lobster .lobster format)', () => {
+  it('generates valid YAML with name and steps', () => {
     const result = generateWorkflowYaml(makeWorkflow());
     const parsed = yaml.load(result) as Record<string, unknown>;
 
-    expect(parsed.apiVersion).toBe('lobster/v1');
-    expect(parsed.kind).toBe('Workflow');
+    expect(parsed.name).toBe('content-pipeline');
+    expect(parsed.steps).toBeDefined();
+    expect(Array.isArray(parsed.steps)).toBe(true);
   });
 
-  it('includes metadata', () => {
+  it('does not include old apiVersion/kind/metadata format', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as Record<string, unknown>;
 
-    expect(parsed.metadata.name).toBe('content-pipeline');
-    expect(parsed.metadata.version).toBe('1.2.0');
-    expect(parsed.metadata.description).toBe('AI content generation pipeline');
+    expect(parsed).not.toHaveProperty('apiVersion');
+    expect(parsed).not.toHaveProperty('kind');
+    expect(parsed).not.toHaveProperty('metadata');
+    expect(parsed).not.toHaveProperty('nodes');
+    expect(parsed).not.toHaveProperty('edges');
   });
 
-  it('includes trigger config for non-manual triggers', () => {
+  it('maps workflow variables to Lobster args format', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as Record<string, unknown>;
 
-    expect(parsed.trigger).toBeDefined();
-    expect(parsed.trigger.type).toBe('message');
-    expect(parsed.trigger.channel).toBe('feishu');
-    expect(parsed.trigger.pattern).toBe('/publish *');
+    expect(parsed.args).toBeDefined();
+    const args = parsed.args as Record<string, { default: unknown }>;
+    expect(args.tag).toEqual({ default: 'family' });
   });
 
-  it('omits trigger for manual type', () => {
-    const result = generateWorkflowYaml(makeWorkflow({
-      triggerConfig: { type: 'manual' },
-    }));
-    const parsed = yaml.load(result) as any;
-
-    expect(parsed.trigger).toBeUndefined();
-  });
-
-  it('includes variables', () => {
-    const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
-
-    expect(parsed.variables).toBeDefined();
-    expect(parsed.variables.topic).toBe('{{ trigger.message }}');
-    expect(parsed.variables.threshold).toBe(0.8);
-  });
-
-  it('omits variables when empty', () => {
+  it('omits args when no variables', () => {
     const result = generateWorkflowYaml(makeWorkflow({ variables: null }));
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as Record<string, unknown>;
 
-    expect(parsed.variables).toBeUndefined();
+    expect(parsed.args).toBeUndefined();
   });
 
-  it('generates skill nodes correctly', () => {
+  it('generates skill steps with command', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
 
-    const draftNode = parsed.nodes.find((n: any) => n.id === 'draft');
-    expect(draftNode).toBeDefined();
-    expect(draftNode.type).toBe('skill');
-    expect(draftNode.skillRef).toBe('content-writer');
-    expect(draftNode.input.topic).toBe('{{ trigger.message }}');
-    expect(draftNode.output).toBe('draft_result');
-    expect(draftNode.timeout).toBe('5m');
+    const collectStep = parsed.steps.find((s) => s.id === 'collect');
+    expect(collectStep).toBeDefined();
+    expect(collectStep!.command).toBe('inbox list --json');
+    expect(collectStep!.stdin).toBeUndefined();
   });
 
-  it('generates review nodes correctly', () => {
+  it('generates skill steps with stdin reference', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
 
-    const reviewNode = parsed.nodes.find((n: any) => n.id === 'review');
-    expect(reviewNode).toBeDefined();
-    expect(reviewNode.type).toBe('review');
-    expect(reviewNode.reviewers).toEqual([{ role: 'content_manager' }]);
-    expect(reviewNode.policy).toBe('any');
-    expect(reviewNode.timeout).toBe('2h');
-    expect(reviewNode.escalation.action).toBe('notify');
-    expect(reviewNode.escalation.target).toEqual([{ role: 'admin' }]);
-    expect(reviewNode.payload.title).toBe('Review content');
+    const categorizeStep = parsed.steps.find((s) => s.id === 'categorize');
+    expect(categorizeStep).toBeDefined();
+    expect(categorizeStep!.command).toBe('inbox categorize --json');
+    expect(categorizeStep!.stdin).toBe('$collect.stdout');
   });
 
-  it('generates condition nodes correctly', () => {
+  it('generates review steps with approval: required', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
 
-    const gateNode = parsed.nodes.find((n: any) => n.id === 'gate');
-    expect(gateNode).toBeDefined();
-    expect(gateNode.type).toBe('condition');
-    expect(gateNode.expression).toBe('{{ nodes.draft.output.score > 0.8 }}');
-    expect(gateNode.branches).toHaveLength(2);
-    expect(gateNode.default).toBe('revise');
+    const approveStep = parsed.steps.find((s) => s.id === 'approve');
+    expect(approveStep).toBeDefined();
+    expect(approveStep!.approval).toBe('required');
+    expect(approveStep!.command).toContain('review');
   });
 
-  it('generates edges correctly', () => {
+  it('generates steps in topological order', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
 
-    expect(parsed.edges).toHaveLength(2);
-    expect(parsed.edges[0]).toEqual({ source: 'draft', target: 'review' });
-    expect(parsed.edges[1]).toEqual({ source: 'review', target: 'gate' });
+    const ids = parsed.steps.map((s) => s.id);
+    expect(ids.indexOf('collect')).toBeLessThan(ids.indexOf('categorize'));
+    expect(ids.indexOf('categorize')).toBeLessThan(ids.indexOf('approve'));
+    expect(ids.indexOf('approve')).toBeLessThan(ids.indexOf('execute'));
   });
 
-  it('includes edge conditions', () => {
+  it('auto-generates stdin from edges when node has no explicit stdin', () => {
     const result = generateWorkflowYaml(makeWorkflow({
-      edges: [
-        { source: 'review', target: 'publish', condition: '{{ approved }}' },
+      nodes: [
+        { id: 'step1', type: 'skill', name: 'Step 1', command: 'echo hello' },
+        { id: 'step2', type: 'skill', name: 'Step 2', command: 'process' },
       ],
+      edges: [{ source: 'step1', target: 'step2' }],
     }));
-    const parsed = yaml.load(result) as any;
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
 
-    expect(parsed.edges[0].condition).toBe('{{ approved }}');
+    const step2 = parsed.steps.find((s) => s.id === 'step2');
+    expect(step2!.stdin).toBe('$step1.stdout');
+  });
+
+  it('generates condition steps with condition field', () => {
+    const result = generateWorkflowYaml(makeWorkflow({
+      nodes: [
+        { id: 'check', type: 'skill', name: 'Check', command: 'test --check' },
+        {
+          id: 'gate',
+          type: 'condition',
+          name: 'Quality Gate',
+          expression: '$check.passed',
+          branches: [
+            { condition: '== true', target: 'proceed' },
+            { condition: '== false', target: 'retry' },
+          ],
+        },
+      ],
+      edges: [{ source: 'check', target: 'gate' }],
+    }));
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
+
+    const gateStep = parsed.steps.find((s) => s.id === 'gate');
+    expect(gateStep).toBeDefined();
+    expect(gateStep!.condition).toBe('$check.passed');
+  });
+
+  it('applies condition from condition node branches to target steps', () => {
+    const result = generateWorkflowYaml(makeWorkflow({
+      nodes: [
+        {
+          id: 'gate',
+          type: 'condition',
+          name: 'Gate',
+          expression: '$prev.status',
+          branches: [{ condition: '$prev.approved', target: 'proceed' }],
+        },
+        { id: 'proceed', type: 'skill', name: 'Proceed', command: 'do-thing' },
+      ],
+      edges: [{ source: 'gate', target: 'proceed' }],
+    }));
+    const parsed = yaml.load(result) as { steps: Array<Record<string, unknown>> };
+
+    const proceedStep = parsed.steps.find((s) => s.id === 'proceed');
+    expect(proceedStep!.condition).toBe('$prev.approved');
   });
 
   it('generates parseable YAML', () => {
     const result = generateWorkflowYaml(makeWorkflow());
-
-    // Should not throw
     expect(() => yaml.load(result)).not.toThrow();
-
-    // Should be a non-empty string
-    expect(result.length).toBeGreaterThan(50);
-    expect(result).toContain('apiVersion: lobster/v1');
-  });
-
-  it('omits optional fields when not present', () => {
-    const result = generateWorkflowYaml(makeWorkflow({
-      nodes: [{
-        id: 'simple',
-        type: 'skill',
-        name: 'Simple Task',
-        skillRef: 'basic-skill',
-        output: 'result',
-      }],
-      edges: [],
-      variables: null,
-      description: null,
-    }));
-    const parsed = yaml.load(result) as any;
-
-    const node = parsed.nodes[0];
-    expect(node.input).toBeUndefined();
-    expect(node.timeout).toBeUndefined();
-    expect(node.retryPolicy).toBeUndefined();
-    expect(node.onError).toBeUndefined();
-    expect(parsed.variables).toBeUndefined();
-    expect(parsed.metadata.description).toBeUndefined();
-  });
-
-  it('does not include abort as default onError', () => {
-    const result = generateWorkflowYaml(makeWorkflow({
-      nodes: [{
-        id: 'task',
-        type: 'skill',
-        name: 'Task',
-        skillRef: 'skill-1',
-        output: 'out',
-        onError: 'abort',
-      }],
-    }));
-    const parsed = yaml.load(result) as any;
-    // abort is the default, should be omitted
-    expect(parsed.nodes[0].onError).toBeUndefined();
-  });
-
-  it('includes skip onError', () => {
-    const result = generateWorkflowYaml(makeWorkflow({
-      nodes: [{
-        id: 'task',
-        type: 'skill',
-        name: 'Task',
-        skillRef: 'skill-1',
-        output: 'out',
-        onError: 'skip',
-      }],
-    }));
-    const parsed = yaml.load(result) as any;
-    expect(parsed.nodes[0].onError).toBe('skip');
+    expect(result.length).toBeGreaterThan(30);
+    expect(result).toContain('name: content-pipeline');
+    expect(result).toContain('steps:');
   });
 });

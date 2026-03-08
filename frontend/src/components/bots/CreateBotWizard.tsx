@@ -4,8 +4,9 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { NodeSelectionStep } from './steps/NodeSelectionStep';
 import { BotInfoStep, type BotInfoData } from './steps/BotInfoStep';
+import { ChannelConfigStep, type ChannelBinding } from './steps/ChannelConfigStep';
 import { ConfirmStep } from './steps/ConfirmStep';
-import { useCreateAgent } from '../../hooks/useAgents';
+import { useCreateAgent, useProvisionAgent } from '../../hooks/useAgents';
 import { ChevronLeft, ChevronRight, Rocket } from 'lucide-react';
 import type { Machine } from '../../types/machine';
 
@@ -14,7 +15,7 @@ interface CreateBotWizardProps {
   onClose: () => void;
 }
 
-const STEPS = ['选择节点', 'Bot 信息', '确认创建'] as const;
+const STEPS = ['选择节点', 'Bot 信息', '渠道配置', '确认创建'] as const;
 
 const defaultBotInfo: BotInfoData = {
   agentId: '',
@@ -26,17 +27,20 @@ const defaultBotInfo: BotInfoData = {
 export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
   const navigate = useNavigate();
   const createAgent = useCreateAgent();
+  const provisionAgent = useProvisionAgent();
 
   const [step, setStep] = useState(0);
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [botInfo, setBotInfo] = useState<BotInfoData>(defaultBotInfo);
   const [botInfoValid, setBotInfoValid] = useState(false);
+  const [channels, setChannels] = useState<ChannelBinding[]>([]);
 
   const reset = () => {
     setStep(0);
     setSelectedMachine(null);
     setBotInfo(defaultBotInfo);
     setBotInfoValid(false);
+    setChannels([]);
   };
 
   const handleClose = () => {
@@ -55,6 +59,15 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
   const canNext = () => {
     if (step === 0) return selectedMachine !== null;
     if (step === 1) return botInfoValid;
+    if (step === 2) {
+      const tokenChannels = channels.filter(
+        (c) => ['telegram', 'discord', 'slack', 'feishu'].includes(c.channelType),
+      );
+      const feishuValid = channels
+        .filter((c) => c.channelType === 'feishu')
+        .every((c) => c.token.length > 0 && (c.signingSecret?.length ?? 0) > 0);
+      return tokenChannels.every((c) => c.token.length > 0) && feishuValid;
+    }
     return true;
   };
 
@@ -62,6 +75,7 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
     if (!selectedMachine) return;
 
     try {
+      // Step 1: Create DB record
       const result = await createAgent.mutateAsync({
         machineId: selectedMachine.id,
         data: {
@@ -71,10 +85,23 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
           isDefault: botInfo.isDefault,
         },
       });
+
+      // Step 2: Provision (create on remote, configure channels, deploy)
+      await provisionAgent.mutateAsync({
+        agentId: result.id,
+        channels: channels.map((ch) => ({
+          channelType: ch.channelType,
+          accountId: ch.accountId,
+          token: ch.token || undefined,
+          signingSecret: ch.signingSecret,
+          encryptKey: ch.encryptKey,
+        })),
+      });
+
       handleClose();
       navigate(`/bots/${result.id}`);
     } catch {
-      // Error toast handled by mutation hook
+      // Error toast handled by mutation hooks
     }
   };
 
@@ -125,8 +152,15 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
             onValidChange={handleBotInfoValidChange}
           />
         )}
-        {step === 2 && selectedMachine && (
-          <ConfirmStep machine={selectedMachine} botInfo={botInfo} />
+        {step === 2 && (
+          <ChannelConfigStep
+            channels={channels}
+            onChange={setChannels}
+            defaultAccountId={botInfo.agentId}
+          />
+        )}
+        {step === 3 && selectedMachine && (
+          <ConfirmStep machine={selectedMachine} botInfo={botInfo} channels={channels} />
         )}
       </div>
 
@@ -149,17 +183,17 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
               disabled={!canNext()}
               onClick={() => setStep(step + 1)}
             >
-              下一步
+              {step === 2 && channels.length === 0 ? '跳过' : '下一步'}
               <ChevronRight size={14} />
             </Button>
           ) : (
             <Button
               size="sm"
               icon={<Rocket size={14} />}
-              loading={createAgent.isPending}
+              loading={createAgent.isPending || provisionAgent.isPending}
               onClick={handleCreate}
             >
-              创建并同步
+              创建并部署
             </Button>
           )}
         </div>

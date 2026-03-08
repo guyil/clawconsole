@@ -7,8 +7,8 @@ import type {
 } from './workflow.types.js';
 
 /**
- * Validates a workflow DAG for structural correctness.
- * Checks: orphan nodes, missing targets, cycles, missing skill refs, etc.
+ * Validates a workflow DAG for structural correctness and Lobster pipeline compatibility.
+ * Checks: orphan nodes, missing targets, cycles, missing commands, stdin refs, etc.
  */
 export function validateWorkflow(
   nodes: WorkflowNodeDef[],
@@ -24,7 +24,6 @@ export function validateWorkflow(
   }
 
   const nodeIds = new Set(nodes.map((n) => n.id));
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
   // Check for duplicate node IDs
   const seenIds = new Set<string>();
@@ -69,7 +68,7 @@ export function validateWorkflow(
     }
   }
 
-  // Check for orphan nodes (no incoming and no outgoing edges, and not the only node)
+  // Check for orphan nodes (not connected, and not the only node)
   if (nodes.length > 1) {
     for (const node of nodes) {
       const hasIn = incoming.get(node.id)!.length > 0;
@@ -84,7 +83,7 @@ export function validateWorkflow(
     }
   }
 
-  // Check for start nodes (no incoming edges)
+  // Check for start nodes
   const startNodes = nodes.filter((n) => incoming.get(n.id)!.length === 0);
   if (startNodes.length === 0 && nodes.length > 1) {
     errors.push({
@@ -93,7 +92,7 @@ export function validateWorkflow(
     });
   }
 
-  // Cycle detection using DFS
+  // Cycle detection
   const cycles = detectCycles(nodeIds, outgoing);
   for (const cycle of cycles) {
     errors.push({
@@ -103,47 +102,39 @@ export function validateWorkflow(
     });
   }
 
-  // Validate skill nodes
+  // Validate individual nodes
   for (const node of nodes) {
     if (node.type === 'skill') {
-      if (!node.skillRef || node.skillRef.trim().length === 0) {
+      if (!node.command || node.command.trim().length === 0) {
         errors.push({
-          type: 'MISSING_SKILL_REF',
+          type: 'MISSING_COMMAND',
           nodeId: node.id,
-          message: `Skill node '${node.id}' has no skillRef`,
-        });
-      } else if (approvedSkillKeys && !approvedSkillKeys.has(node.skillRef)) {
-        errors.push({
-          type: 'MISSING_SKILL',
-          nodeId: node.id,
-          message: `Referenced skill '${node.skillRef}' not found or not approved`,
+          message: `Skill node '${node.id}' has no command defined`,
         });
       }
 
-      if (!node.output || node.output.trim().length === 0) {
-        errors.push({
-          type: 'MISSING_OUTPUT',
-          nodeId: node.id,
-          message: `Skill node '${node.id}' has no output key`,
-        });
-      }
-    }
-
-    if (node.type === 'review') {
-      if (!node.reviewers || node.reviewers.length === 0) {
-        errors.push({
-          type: 'NO_REVIEWERS',
-          nodeId: node.id,
-          message: `Review node '${node.id}' has no reviewers defined`,
-        });
-      }
-
-      if (!node.timeout) {
+      // Validate skillRef if provided
+      if (node.skillRef && approvedSkillKeys && !approvedSkillKeys.has(node.skillRef)) {
         warnings.push({
-          type: 'NO_TIMEOUT',
+          type: 'UNRESOLVED_SKILL_REF',
           nodeId: node.id,
-          message: `Review node '${node.id}' has no timeout configured`,
+          message: `Referenced skill '${node.skillRef}' not found in approved catalog`,
         });
+      }
+
+      // Validate stdin reference format
+      if (node.stdin) {
+        const stdinRef = node.stdin;
+        if (stdinRef.startsWith('$')) {
+          const refId = stdinRef.replace(/^\$/, '').replace(/\.stdout$/, '');
+          if (!nodeIds.has(refId)) {
+            errors.push({
+              type: 'INVALID_STDIN_REF',
+              nodeId: node.id,
+              message: `stdin reference '$${refId}' points to non-existent step`,
+            });
+          }
+        }
       }
     }
 
@@ -174,21 +165,8 @@ export function validateWorkflow(
         }
       }
     }
-  }
 
-  // Check for duplicate output keys across skill nodes
-  const outputKeys = new Set<string>();
-  for (const node of nodes) {
-    if (node.type === 'skill' && node.output) {
-      if (outputKeys.has(node.output)) {
-        errors.push({
-          type: 'DUPLICATE_OUTPUT_KEY',
-          nodeId: node.id,
-          message: `Duplicate output key '${node.output}' in node '${node.id}'`,
-        });
-      }
-      outputKeys.add(node.output);
-    }
+    // Review nodes only need a name (prompt is optional), no errors to check
   }
 
   return {
@@ -200,15 +178,14 @@ export function validateWorkflow(
 
 /**
  * Detect cycles in a directed graph using DFS.
- * Returns array of cycle paths.
  */
 function detectCycles(
   nodeIds: Set<string>,
   outgoing: Map<string, string[]>,
 ): string[][] {
-  const WHITE = 0; // unvisited
-  const GRAY = 1;  // in current DFS path
-  const BLACK = 2; // fully processed
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
 
   const color = new Map<string, number>();
   for (const id of nodeIds) color.set(id, WHITE);
@@ -221,7 +198,6 @@ function detectCycles(
 
     for (const v of outgoing.get(u) ?? []) {
       if (color.get(v) === GRAY) {
-        // Found a back edge → extract cycle
         const cycle: string[] = [v, u];
         let curr = u;
         while (parent.get(curr) !== null && parent.get(curr) !== v) {

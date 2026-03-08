@@ -16,6 +16,8 @@ import { NotFoundError, ValidationError } from '../../shared/errors.js';
 import { parseSkillFrontmatter } from '../../parsers/markdown-frontmatter.parser.js';
 import { createChildLogger } from '../../shared/logger.js';
 import JSZip from 'jszip';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 const log = createChildLogger('skill-service');
 
@@ -214,8 +216,13 @@ export class SkillService {
     source?: SkillSource;
     scope?: SkillScope;
     reviewStatus?: SkillReviewStatus;
+    tag?: string;
   }): Promise<SkillCatalogEntry[]> {
     return this.repo.findAll(filters);
+  }
+
+  async getAllTags(): Promise<string[]> {
+    return this.repo.findAllTags();
   }
 
   async getSkill(id: string): Promise<SkillCatalogEntry> {
@@ -283,13 +290,46 @@ export class SkillService {
     }
 
     const scope = input.scope ?? 'agent';
-    return this.repo.installSkillOnAgent(agentId, input.skillCatalogId, scope, input.configOverrides);
+    const result = await this.repo.installSkillOnAgent(agentId, input.skillCatalogId, scope, input.configOverrides);
+
+    // Deploy skill files to the remote machine so the agent can use them
+    if (skill.skillMdContent) {
+      try {
+        const agent = await this.agentRepo.findById(agentId);
+        if (agent) {
+          await this.deploySkillToMachine(skill.id, agent.machineId, scope, agentId);
+          log.info({ agentId, skillKey: skill.skillKey }, 'Skill auto-deployed on assign');
+        }
+      } catch (err) {
+        log.warn({ agentId, skillId: skill.id, err }, 'Auto-deploy on assign failed (DB record created)');
+      }
+    }
+
+    return result;
   }
 
   async uninstallSkillFromAgent(agentId: string, skillCatalogId: string): Promise<void> {
+    const skill = await this.repo.findById(skillCatalogId);
     const removed = await this.repo.uninstallSkillFromAgent(agentId, skillCatalogId);
     if (!removed) {
       throw new NotFoundError('AgentSkill', `${agentId}/${skillCatalogId}`);
+    }
+
+    // Remove skill files from the remote machine
+    if (skill) {
+      try {
+        const agent = await this.agentRepo.findById(agentId);
+        if (agent) {
+          const machine = await this.machineService.getMachine(agent.machineId);
+          const connInfo = this.machineService.toConnectionInfo(machine);
+          const workspacePath = agent.workspacePath ?? 'workspace';
+          const skillDir = `${machine.openclawHome}/${workspacePath}/skills/${skill.skillKey}`;
+          await this.fileTransfer.removeDirectory(connInfo, skillDir);
+          log.info({ agentId, skillKey: skill.skillKey }, 'Skill files removed on uninstall');
+        }
+      } catch (err) {
+        log.warn({ agentId, skillCatalogId, err }, 'Remote skill cleanup failed (DB record removed)');
+      }
     }
   }
 
@@ -553,5 +593,121 @@ export class SkillService {
     }
 
     log.info({ skillId, skillKey: skill.skillKey, machineId, scope, agentId }, 'Skill deployed to machine');
+  }
+
+  /**
+   * Read SKILL.md and auxiliary text files from a local folder.
+   * Binary files are skipped.
+   */
+  private async readLocalSkillFolder(folderPath: string): Promise<{
+    skillMdContent: string | null;
+    auxiliaryFiles: Record<string, string>;
+  }> {
+    let stat;
+    try {
+      stat = await fs.stat(folderPath);
+    } catch {
+      throw new ValidationError(`Path does not exist: ${folderPath}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new ValidationError(`Path is not a directory: ${folderPath}`);
+    }
+
+    let skillMdContent: string | null = null;
+    const auxiliaryFiles: Record<string, string> = {};
+
+    const walk = async (dir: string, prefix: string) => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+        if (entry.isDirectory()) {
+          await walk(fullPath, relativePath);
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (BINARY_EXTENSIONS.has(ext)) continue;
+
+          const content = await fs.readFile(fullPath, 'utf-8');
+          if (entry.name === 'SKILL.md' && !prefix) {
+            skillMdContent = content;
+          } else {
+            auxiliaryFiles[relativePath] = content;
+          }
+        }
+      }
+    };
+
+    await walk(folderPath, '');
+    return { skillMdContent, auxiliaryFiles };
+  }
+
+  async importSkillFromLocal(folderPath: string): Promise<SkillCatalogEntry> {
+    const normalizedPath = path.resolve(folderPath);
+    const { skillMdContent, auxiliaryFiles } = await this.readLocalSkillFolder(normalizedPath);
+
+    if (!skillMdContent) {
+      throw new ValidationError(`No SKILL.md found in folder: ${normalizedPath}`);
+    }
+
+    const { frontmatter } = parseSkillFrontmatter(skillMdContent);
+    const skillKey = frontmatter.name ?? path.basename(normalizedPath);
+    const skillName = frontmatter.name ?? skillKey;
+
+    const existing = await this.repo.findByKey(skillKey);
+    if (existing) {
+      const updated = await this.repo.update(existing.id, {
+        skillMdContent,
+        auxiliaryFiles: Object.keys(auxiliaryFiles).length > 0 ? auxiliaryFiles : undefined,
+        name: frontmatter.name ?? existing.name,
+        description: frontmatter.description ?? existing.description ?? undefined,
+        requiresBins: frontmatter.metadata?.openclaw?.requires?.bins,
+        requiresEnv: frontmatter.metadata?.openclaw?.requires?.env,
+      });
+      log.info({ skillKey, folderPath: normalizedPath, action: 'updated' }, 'Skill reimported from local folder');
+      return updated!;
+    }
+
+    const created = await this.repo.create({
+      skillKey,
+      name: skillName,
+      description: frontmatter.description,
+      scope: 'global',
+      source: 'local',
+      skillMdContent,
+      auxiliaryFiles: Object.keys(auxiliaryFiles).length > 0 ? auxiliaryFiles : undefined,
+      localPath: normalizedPath,
+      requiresBins: frontmatter.metadata?.openclaw?.requires?.bins,
+      requiresEnv: frontmatter.metadata?.openclaw?.requires?.env,
+    });
+
+    log.info({ skillKey, folderPath: normalizedPath, skillId: created.id }, 'Skill imported from local folder');
+    return created;
+  }
+
+  async syncLocalSkill(id: string): Promise<SkillCatalogEntry> {
+    const skill = await this.getSkill(id);
+    if (!skill.localPath) {
+      throw new ValidationError(`Skill "${skill.name}" is not linked to a local folder`);
+    }
+
+    const { skillMdContent, auxiliaryFiles } = await this.readLocalSkillFolder(skill.localPath);
+    if (!skillMdContent) {
+      throw new ValidationError(`No SKILL.md found in folder: ${skill.localPath}`);
+    }
+
+    const { frontmatter } = parseSkillFrontmatter(skillMdContent);
+    const updated = await this.repo.update(id, {
+      skillMdContent,
+      auxiliaryFiles: Object.keys(auxiliaryFiles).length > 0 ? auxiliaryFiles : undefined,
+      name: frontmatter.name ?? skill.name,
+      description: frontmatter.description ?? skill.description ?? undefined,
+      requiresBins: frontmatter.metadata?.openclaw?.requires?.bins,
+      requiresEnv: frontmatter.metadata?.openclaw?.requires?.env,
+    });
+
+    log.info({ skillId: id, skillKey: skill.skillKey, localPath: skill.localPath }, 'Local skill synced');
+    return updated!;
   }
 }

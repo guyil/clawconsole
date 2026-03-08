@@ -2,19 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { WorkflowService } from './workflow.service.js';
 
-// --- Zod Schemas ---
-
-const ReviewerRefSchema = z.object({
-  userId: z.string().optional(),
-  role: z.string().optional(),
-  group: z.string().optional(),
-});
-
-const EscalationSchema = z.object({
-  action: z.enum(['notify', 'auto_approve', 'auto_reject', 'abort']),
-  target: z.array(ReviewerRefSchema).min(1),
-  message: z.string().optional(),
-});
+// --- Zod Schemas (aligned with Lobster pipeline steps) ---
 
 const RetryPolicySchema = z.object({
   maxRetries: z.number().int().min(0).max(10),
@@ -30,9 +18,9 @@ const SkillNodeSchema = z.object({
   id: z.string().min(1).max(255),
   type: z.literal('skill'),
   name: z.string().min(1).max(255),
-  skillRef: z.string().min(1).max(255),
-  input: z.record(z.string()).optional(),
-  output: z.string().min(1).max(255),
+  skillRef: z.string().max(255).optional(),
+  command: z.string().min(1),
+  stdin: z.string().optional(),
   timeout: z.string().max(50).optional(),
   retryPolicy: RetryPolicySchema.optional(),
   onError: z.enum(['abort', 'skip', 'fallback']).optional(),
@@ -42,11 +30,7 @@ const ReviewNodeSchema = z.object({
   id: z.string().min(1).max(255),
   type: z.literal('review'),
   name: z.string().min(1).max(255),
-  reviewers: z.array(ReviewerRefSchema).min(1),
-  policy: z.enum(['any', 'all']),
-  timeout: z.string().max(50).optional(),
-  escalation: EscalationSchema.optional(),
-  payload: z.record(z.string()).optional(),
+  prompt: z.string().optional(),
 });
 
 const ConditionNodeSchema = z.object({
@@ -80,10 +64,11 @@ const TriggerConfigSchema = z.object({
 const CreateWorkflowSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
+  workflowKey: z.string().max(255).optional(),
   machineId: z.string().min(1),
   agentId: z.string().optional(),
   triggerConfig: TriggerConfigSchema,
-  nodes: z.array(NodeSchema).min(1),
+  nodes: z.array(NodeSchema),
   edges: z.array(EdgeSchema),
   variables: z.record(z.unknown()).optional(),
   createdBy: z.string().min(1),
@@ -102,13 +87,8 @@ const UpdateWorkflowSchema = z.object({
 });
 
 const DeployWorkflowSchema = z.object({
-  deployedBy: z.string().min(1),
-});
-
-const ReviewDecisionSchema = z.object({
-  decision: z.enum(['approved', 'rejected']),
-  decidedBy: z.string().min(1),
-  comments: z.string().optional(),
+  scope: z.enum(['global', 'agent']).optional(),
+  agentId: z.string().optional(),
 });
 
 // --- Route Registration ---
@@ -124,7 +104,7 @@ export function registerWorkflowRoutes(
     const workflows = await workflowService.listWorkflows({
       machineId: query.machineId,
       agentId: query.agentId,
-      status: query.status as any,
+      status: query.status as 'draft' | 'active' | 'disabled' | 'archived',
     });
     return { data: workflows, total: workflows.length };
   });
@@ -159,12 +139,18 @@ export function registerWorkflowRoutes(
     return workflowService.validateWorkflow(workflowId);
   });
 
-  // --- Deploy ---
+  // --- Deploy to Machine ---
 
-  fastify.post('/api/workflows/:workflowId/deploy', async (request) => {
-    const { workflowId } = request.params as { workflowId: string };
+  fastify.post('/api/workflows/:workflowId/deploy/:machineId', async (request) => {
+    const { workflowId, machineId } = request.params as { workflowId: string; machineId: string };
     const body = DeployWorkflowSchema.parse(request.body);
-    return workflowService.deployWorkflow(workflowId, body.deployedBy);
+    return workflowService.deployWorkflowToMachine(
+      workflowId,
+      machineId,
+      'system',
+      (body.scope as 'global' | 'agent') ?? 'global',
+      body.agentId,
+    );
   });
 
   // --- YAML Preview ---
@@ -181,58 +167,5 @@ export function registerWorkflowRoutes(
     const { workflowId } = request.params as { workflowId: string };
     const versions = await workflowService.listVersions(workflowId);
     return { data: versions, total: versions.length };
-  });
-
-  // --- Workflow Runs ---
-
-  fastify.get('/api/workflows/:workflowId/runs', async (request) => {
-    const { workflowId } = request.params as { workflowId: string };
-    const query = request.query as Record<string, string>;
-    const runs = await workflowService.listRuns({
-      workflowId,
-      status: query.status as any,
-    });
-    return { data: runs, total: runs.length };
-  });
-
-  fastify.get('/api/workflow-runs/:runId', async (request) => {
-    const { runId } = request.params as { runId: string };
-    return workflowService.getRun(runId);
-  });
-
-  fastify.get('/api/workflow-runs/:runId/nodes', async (request) => {
-    const { runId } = request.params as { runId: string };
-    const nodes = await workflowService.getRunNodes(runId);
-    return { data: nodes, total: nodes.length };
-  });
-
-  fastify.post('/api/workflow-runs/:runId/abort', async (request) => {
-    const { runId } = request.params as { runId: string };
-    return workflowService.abortRun(runId);
-  });
-
-  // --- Reviews ---
-
-  fastify.get('/api/reviews/pending', async (request) => {
-    const query = request.query as Record<string, string>;
-    const reviews = await workflowService.listPendingReviews(query.userId);
-    return { data: reviews, total: reviews.length };
-  });
-
-  fastify.get('/api/reviews/:runId/:nodeId', async (request) => {
-    const { runId, nodeId } = request.params as { runId: string; nodeId: string };
-    return workflowService.getReview(runId, nodeId);
-  });
-
-  fastify.post('/api/reviews/:runId/:nodeId/decide', async (request) => {
-    const { runId, nodeId } = request.params as { runId: string; nodeId: string };
-    const body = ReviewDecisionSchema.parse(request.body);
-    return workflowService.submitReviewDecision(
-      runId,
-      nodeId,
-      body.decision,
-      body.decidedBy,
-      body.comments,
-    );
   });
 }

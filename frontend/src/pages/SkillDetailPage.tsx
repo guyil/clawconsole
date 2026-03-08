@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useSkill, useReviewSkill, useDeleteSkill } from '../hooks/useSkills';
+import { useSkill, useReviewSkill, useDeleteSkill, useSyncLocalSkill, useUpdateSkill, useSkillTags } from '../hooks/useSkills';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -22,6 +22,10 @@ import {
   User,
   Copy,
   Check,
+  FolderOpen,
+  RefreshCw,
+  Plus,
+  X,
 } from 'lucide-react';
 import type { SkillReviewStatus } from '../types/skill';
 
@@ -39,6 +43,7 @@ const sourceLabels: Record<string, string> = {
   custom: '自定义',
   clawhub: 'ClawHub',
   bundled: '内置',
+  local: '本地文件夹',
 };
 
 export function SkillDetailPage() {
@@ -46,11 +51,16 @@ export function SkillDetailPage() {
   const { data: skill, isLoading } = useSkill(skillId!);
   const review = useReviewSkill();
   const deleteSkill = useDeleteSkill();
+  const syncLocal = useSyncLocalSkill();
+  const updateSkill = useUpdateSkill();
+  const { data: tagsData } = useSkillTags();
   const navigate = useNavigate();
 
   const [deployOpen, setDeployOpen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeFileTab, setActiveFileTab] = useState<string | null>(null);
+  const [showTagInput, setShowTagInput] = useState(false);
+  const [newTag, setNewTag] = useState('');
 
   if (isLoading || !skill) return <PageSpinner />;
 
@@ -71,6 +81,25 @@ export function SkillDetailPage() {
       onSuccess: () => navigate('/skills'),
     });
   }
+
+  function handleAddTag(tag: string) {
+    const trimmed = tag.trim().toLowerCase();
+    if (!trimmed) return;
+    const current = skill!.tags ?? [];
+    if (current.includes(trimmed)) return;
+    updateSkill.mutate({ id: skill!.id, data: { tags: [...current, trimmed] } });
+    setNewTag('');
+    setShowTagInput(false);
+  }
+
+  function handleRemoveTag(tag: string) {
+    const current = skill!.tags ?? [];
+    updateSkill.mutate({ id: skill!.id, data: { tags: current.filter((t) => t !== tag) } });
+  }
+
+  const allTags = tagsData?.data ?? [];
+  const existingTags = skill.tags ?? [];
+  const suggestedTags = allTags.filter((t) => !existingTags.includes(t));
 
   return (
     <div>
@@ -146,6 +175,17 @@ export function SkillDetailPage() {
                 部署到节点
               </Button>
             )}
+            {skill.localPath && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<RefreshCw size={14} />}
+                loading={syncLocal.isPending}
+                onClick={() => syncLocal.mutate(skill.id)}
+              >
+                同步本地
+              </Button>
+            )}
             <Button
               variant="danger"
               size="sm"
@@ -198,6 +238,92 @@ export function SkillDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* Tags */}
+        <div className="flex items-start gap-2 mt-3 pt-3 border-t border-claw-border">
+          <Tag size={14} className="text-claw-accent mt-1 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-claw-muted text-xs mb-1.5">标签</div>
+            <div className="flex gap-1.5 flex-wrap items-center">
+              {existingTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-claw-accent/10 text-claw-accent border border-claw-accent/20 rounded-full text-xs"
+                >
+                  {tag}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="text-claw-accent/60 hover:text-claw-accent cursor-pointer transition-colors"
+                    title="移除标签"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              {showTagInput ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    className="w-28 bg-claw-input border border-claw-border rounded-lg px-2 py-0.5 text-xs text-claw-text placeholder-claw-muted focus:outline-none focus:border-claw-primary"
+                    placeholder="输入标签..."
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddTag(newTag);
+                      if (e.key === 'Escape') { setShowTagInput(false); setNewTag(''); }
+                    }}
+                    list="tag-suggestions"
+                  />
+                  <datalist id="tag-suggestions">
+                    {suggestedTags.map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                  <button
+                    onClick={() => handleAddTag(newTag)}
+                    className="text-claw-primary hover:text-claw-primary-light cursor-pointer transition-colors text-xs"
+                  >
+                    确认
+                  </button>
+                  <button
+                    onClick={() => { setShowTagInput(false); setNewTag(''); }}
+                    className="text-claw-muted hover:text-claw-text cursor-pointer transition-colors"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowTagInput(true)}
+                  className="inline-flex items-center gap-0.5 px-2 py-0.5 border border-dashed border-claw-border rounded-full text-xs text-claw-muted hover:border-claw-accent hover:text-claw-accent cursor-pointer transition-colors"
+                >
+                  <Plus size={11} />
+                  添加标签
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Local path */}
+        {skill.localPath && (
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-claw-border text-sm">
+            <FolderOpen size={14} className="text-claw-muted shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-claw-muted text-xs">本地路径</div>
+              <div className="text-claw-text font-mono text-xs truncate" title={skill.localPath}>
+                {skill.localPath}
+              </div>
+            </div>
+            <button
+              className="text-claw-muted hover:text-claw-text transition-colors cursor-pointer shrink-0"
+              onClick={() => copyToClipboard(skill.localPath!, 'localPath')}
+              title="复制路径"
+            >
+              {copiedField === 'localPath' ? <Check size={13} /> : <Copy size={13} />}
+            </button>
+          </div>
+        )}
 
         {/* Dependencies */}
         {((skill.requiresBins && skill.requiresBins.length > 0) ||

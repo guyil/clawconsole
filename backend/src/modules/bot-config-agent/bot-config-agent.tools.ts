@@ -1,4 +1,5 @@
 import type { LangGraphToolDef } from '../../shared/langgraph/types.js';
+import { createBrowserTools } from '../../shared/langgraph/browser-tools.js';
 import type { ConfigChatSession } from './bot-config-agent.types.js';
 
 const CONFIG_FILES = [
@@ -22,6 +23,7 @@ export function buildConfigTools(session: ConfigChatSession): LangGraphToolDef[]
     createWriteConfigFileTool(session),
     createListConfigFilesTool(session),
     createGetAgentInfoTool(session),
+    ...createBrowserTools(`bot-config-${session.id}`),
   ];
 }
 

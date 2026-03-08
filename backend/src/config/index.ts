@@ -57,10 +57,11 @@ export const config = {
   ssh: {
     defaultUser: optionalEnv('SSH_DEFAULT_USER', 'claw'),
     defaultPort: intEnv('SSH_DEFAULT_PORT', 22),
-    connectionTimeoutMs: intEnv('SSH_CONNECTION_TIMEOUT_MS', 10_000),
+    connectionTimeoutMs: intEnv('SSH_CONNECTION_TIMEOUT_MS', 30_000),
+    commandTimeoutMs: intEnv('SSH_COMMAND_TIMEOUT_MS', 60_000),
     idleTimeoutMs: intEnv('SSH_IDLE_TIMEOUT_MS', 300_000),
     maxConnectionsPerMachine: intEnv('SSH_MAX_CONNECTIONS_PER_MACHINE', 4),
-    queueTimeoutMs: intEnv('SSH_QUEUE_TIMEOUT_MS', 30_000),
+    queueTimeoutMs: intEnv('SSH_QUEUE_TIMEOUT_MS', 60_000),
     maxQueueSize: intEnv('SSH_MAX_QUEUE_SIZE', 20),
   },
 
@@ -88,6 +89,9 @@ export const config = {
     maxToolCalls: intEnv('PLAYGROUND_MAX_TOOL_CALLS', 50),
     sandboxMemoryMb: intEnv('PLAYGROUND_SANDBOX_MEMORY_MB', 256),
     defaultModel: optionalEnv('PLAYGROUND_DEFAULT_MODEL', 'claude-sonnet-4-20250514'),
+    browserHeadless: optionalEnv('PLAYGROUND_BROWSER_HEADLESS', 'true') === 'true',
+    browserbaseApiKey: optionalEnv('BROWSERBASE_API_KEY', ''),
+    browserbaseProjectId: optionalEnv('BROWSERBASE_PROJECT_ID', ''),
   },
 } as const;
 

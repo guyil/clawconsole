@@ -3,13 +3,7 @@
 export type WorkflowStatus = 'draft' | 'active' | 'disabled' | 'archived';
 export type TriggerType = 'message' | 'schedule' | 'webhook' | 'manual';
 export type NodeType = 'skill' | 'review' | 'condition';
-export type ReviewPolicy = 'any' | 'all';
-export type EscalationAction = 'notify' | 'auto_approve' | 'auto_reject' | 'abort';
 export type NodeErrorAction = 'abort' | 'skip' | 'fallback';
-export type WorkflowRunStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
-export type RunNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'waiting_review';
-export type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'escalated' | 'expired';
-export type ReviewDecision = 'approved' | 'rejected';
 
 // --- Trigger Config ---
 
@@ -20,19 +14,7 @@ export interface TriggerConfig {
   cron?: string;
 }
 
-// --- Node Definitions ---
-
-export interface ReviewerRef {
-  userId?: string;
-  role?: string;
-  group?: string;
-}
-
-export interface EscalationConfig {
-  action: EscalationAction;
-  target: ReviewerRef[];
-  message?: string;
-}
+// --- Node Definitions (aligned with Lobster .lobster pipeline steps) ---
 
 export interface RetryPolicy {
   maxRetries: number;
@@ -43,9 +25,9 @@ export interface SkillNodeDef {
   id: string;
   type: 'skill';
   name: string;
-  skillRef: string;
-  input?: Record<string, string>;
-  output: string;
+  skillRef?: string;
+  command: string;
+  stdin?: string;
   timeout?: string;
   retryPolicy?: RetryPolicy;
   onError?: NodeErrorAction;
@@ -55,11 +37,7 @@ export interface ReviewNodeDef {
   id: string;
   type: 'review';
   name: string;
-  reviewers: ReviewerRef[];
-  policy: ReviewPolicy;
-  timeout?: string;
-  escalation?: EscalationConfig;
-  payload?: Record<string, string>;
+  prompt?: string;
 }
 
 export interface ConditionBranch {
@@ -92,6 +70,7 @@ export interface Workflow {
   id: string;
   name: string;
   description: string | null;
+  workflowKey: string;
   machineId: string;
   agentId: string | null;
   status: WorkflowStatus;
@@ -111,6 +90,7 @@ export interface Workflow {
 export interface CreateWorkflowInput {
   name: string;
   description?: string;
+  workflowKey?: string;
   machineId: string;
   agentId?: string;
   triggerConfig: TriggerConfig;
@@ -141,56 +121,6 @@ export interface WorkflowVersion {
   snapshotJson: Record<string, unknown>;
   changeLog: string | null;
   createdBy: string;
-  createdAt: string;
-}
-
-// --- Workflow Run ---
-
-export interface WorkflowRun {
-  id: string;
-  workflowId: string;
-  runId: string;
-  machineId: string;
-  status: WorkflowRunStatus;
-  triggerInfo: Record<string, unknown> | null;
-  currentNodes: string[] | null;
-  variables: Record<string, unknown> | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  errorMessage: string | null;
-  syncedAt: string;
-}
-
-// --- Workflow Run Node ---
-
-export interface WorkflowRunNode {
-  id: string;
-  runId: string;
-  nodeId: string;
-  nodeType: NodeType;
-  status: RunNodeStatus;
-  inputJson: Record<string, unknown> | null;
-  outputJson: Record<string, unknown> | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  errorMessage: string | null;
-}
-
-// --- Workflow Review ---
-
-export interface WorkflowReview {
-  id: string;
-  runId: string;
-  nodeId: string;
-  status: ReviewStatus;
-  reviewers: ReviewerRef[];
-  policy: string;
-  payload: Record<string, unknown> | null;
-  timeoutAt: string | null;
-  decision: ReviewDecision | null;
-  decidedBy: string | null;
-  comments: string | null;
-  decidedAt: string | null;
   createdAt: string;
 }
 
