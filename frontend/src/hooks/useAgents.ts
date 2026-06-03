@@ -51,6 +51,39 @@ export function useAgentMemoryFiles(agentId: string) {
   });
 }
 
+export function useUpdateAgentConfigFile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, filename, content }: { agentId: string; filename: string; content: string }) =>
+      agentsApi.updateConfigFile(agentId, filename, content),
+    onSuccess: (result, vars) => {
+      qc.setQueryData(agentKeys.configFiles(vars.agentId), (prev: { data?: unknown[] } | undefined) => {
+        if (!prev?.data) return prev;
+        return {
+          ...prev,
+          data: prev.data.map((file) => {
+            if (
+              file &&
+              typeof file === 'object' &&
+              'filename' in file &&
+              file.filename === vars.filename
+            ) {
+              return result.data;
+            }
+            return file;
+          }),
+        };
+      });
+      qc.invalidateQueries({ queryKey: agentKeys.configFiles(vars.agentId) });
+      qc.invalidateQueries({ queryKey: agentKeys.detail(vars.agentId) });
+      toast.success('已保存，等待同步生效');
+    },
+    onError: (err: Error) => {
+      toast.error(`保存失败: ${err.message}`);
+    },
+  });
+}
+
 export function useCreateAgent() {
   const qc = useQueryClient();
   return useMutation({

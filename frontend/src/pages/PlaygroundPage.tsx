@@ -290,7 +290,7 @@ export function PlaygroundPage() {
                           <div className="min-w-0">
                             <div className="font-medium truncate text-xs">{agent.name ?? agent.agentId}</div>
                             <div className="text-[10px] text-claw-muted truncate">
-                              {(agent as Record<string, unknown>).machineName ?? agent.machineId?.slice(0, 8)}
+                              {agent.machineName ?? agent.machineId?.slice(0, 8)}
                             </div>
                           </div>
                         </div>
@@ -355,7 +355,7 @@ export function PlaygroundPage() {
       </div>
 
       {/* Three-Panel Layout */}
-      <PanelGroup direction="horizontal" className="flex-1 min-h-0">
+      <PanelGroup orientation="horizontal" className="flex-1 min-h-0">
         {/* Left: Skill Editor */}
         <Panel defaultSize={30} minSize={20}>
           <SkillEditorPanel

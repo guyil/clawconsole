@@ -84,7 +84,15 @@ export class FileRepository implements FileRepositoryInterface {
   async findConfigFilesByWorkspace(
     machineId: string,
     workspacePath: string,
-  ): Promise<Array<{ filename: string; content: string; updatedAt: Date }>> {
+  ): Promise<Array<{
+    id: string;
+    filename: string;
+    relativePath: string;
+    content: string;
+    localDirty: boolean;
+    remoteDirty: boolean;
+    updatedAt: Date;
+  }>> {
     const rows = await this.db('managed_files')
       .where('machine_id', machineId)
       .where('relative_path', 'like', `${workspacePath}/%.md`)
@@ -92,12 +100,16 @@ export class FileRepository implements FileRepositoryInterface {
       .whereNot('relative_path', `${workspacePath}/MEMORY.md`)
       .whereNot('relative_path', `${workspacePath}/memory.md`)
       .whereNotNull('content')
-      .select('relative_path', 'content', 'updated_at')
+      .select('id', 'relative_path', 'content', 'local_dirty', 'remote_dirty', 'updated_at')
       .orderBy('relative_path', 'asc');
 
     return rows.map((row) => ({
+      id: row.id as string,
       filename: (row.relative_path as string).replace(`${workspacePath}/`, ''),
+      relativePath: row.relative_path as string,
       content: row.content as string,
+      localDirty: Boolean(row.local_dirty),
+      remoteDirty: Boolean(row.remote_dirty),
       updatedAt: new Date(row.updated_at as string),
     }));
   }

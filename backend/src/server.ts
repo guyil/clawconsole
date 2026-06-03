@@ -73,6 +73,7 @@ import {
 import { PlatformSkillRegistry, allPlatformSkills } from './shared/platform-skills/index.js';
 import { classifyMemoryFile, type MemoryFileRecord } from './shared/memory-classifier.js';
 import { hashContent } from './shared/crypto.js';
+import type { ManagedFile } from './modules/files/file.types.js';
 
 import {
   setupRecurringJobs,
@@ -107,6 +108,68 @@ import { createDailyOssBackupHandler } from './jobs/daily-oss-backup.job.js';
 import { createManualOssDistillHandler } from './jobs/manual-oss-distill.job.js';
 
 const log = createChildLogger('server');
+
+const BOT_CONFIG_FILENAMES = new Set([
+  'SOUL.md',
+  'IDENTITY.md',
+  'USER.md',
+  'AGENTS.md',
+  'TOOLS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'README.md',
+]);
+
+interface BotConfigFileMetadata {
+  id: string;
+  filename: string;
+  relativePath: string;
+  content: string;
+  localDirty: boolean;
+  remoteDirty: boolean;
+  updatedAt: Date;
+}
+
+function validateBotConfigFilename(filename: string): string {
+  if (
+    typeof filename !== 'string' ||
+    !BOT_CONFIG_FILENAMES.has(filename) ||
+    filename.includes('/') ||
+    filename.includes('\\') ||
+    filename.includes('..')
+  ) {
+    throw new AppError('Unsupported bot config filename', 'VALIDATION_ERROR', 400);
+  }
+  return filename;
+}
+
+function isBotConfigFilename(filename: string): boolean {
+  return BOT_CONFIG_FILENAMES.has(filename);
+}
+
+function formatBotConfigFile(file: BotConfigFileMetadata) {
+  return {
+    id: file.id,
+    filename: file.filename,
+    relativePath: file.relativePath,
+    content: file.content,
+    localDirty: file.localDirty,
+    remoteDirty: file.remoteDirty,
+    updatedAt: file.updatedAt.toISOString(),
+  };
+}
+
+function formatManagedBotConfigFile(file: ManagedFile) {
+  return formatBotConfigFile({
+    id: file.id,
+    filename: file.relativePath.split('/').pop() ?? file.relativePath,
+    relativePath: file.relativePath,
+    content: file.content ?? '',
+    localDirty: file.localDirty,
+    remoteDirty: file.remoteDirty,
+    updatedAt: file.updatedAt,
+  });
+}
 
 function groupMemoryFiles(records: MemoryFileRecord[]) {
   const core: MemoryFileRecord[] = [];
@@ -545,15 +608,16 @@ async function main() {
 
     // Read from local DB cache (populated by pull sync / discovery)
     const cachedFiles = await fileRepo.findConfigFilesByWorkspace(machine.id, workspace);
+    const cachedConfigFiles = cachedFiles.filter((f) => isBotConfigFilename(f.filename));
 
     // If DB has data and no explicit refresh requested, return cached data
-    if (cachedFiles.length > 0 && query.refresh !== 'true') {
-      const oldestUpdate = cachedFiles.reduce(
+    if (cachedConfigFiles.length > 0 && query.refresh !== 'true') {
+      const oldestUpdate = cachedConfigFiles.reduce(
         (min, f) => (f.updatedAt < min ? f.updatedAt : min),
-        cachedFiles[0].updatedAt,
+        cachedConfigFiles[0].updatedAt,
       );
       return {
-        data: cachedFiles.map(({ filename, content }) => ({ filename, content })),
+        data: cachedConfigFiles.map(formatBotConfigFile),
         lastSyncedAt: oldestUpdate.toISOString(),
       };
     }
@@ -567,10 +631,27 @@ async function main() {
         { timeoutMs: 10_000 },
       );
       const lines = stdout.split('\n').filter(Boolean);
-      if (lines.length === 0) return { data: [], lastSyncedAt: null };
+      if (lines.length === 0) {
+        if (cachedConfigFiles.length > 0) {
+          return {
+            data: cachedConfigFiles.map(formatBotConfigFile),
+            lastSyncedAt: cachedConfigFiles[0].updatedAt.toISOString(),
+          };
+        }
+        return { data: [], lastSyncedAt: null };
+      }
 
       const absBasePath = lines[0];
-      const filenames = lines.slice(1);
+      const filenames = lines.slice(1).filter(isBotConfigFilename);
+      if (filenames.length === 0) {
+        if (cachedConfigFiles.length > 0) {
+          return {
+            data: cachedConfigFiles.map(formatBotConfigFile),
+            lastSyncedAt: cachedConfigFiles[0].updatedAt.toISOString(),
+          };
+        }
+        return { data: [], lastSyncedAt: null };
+      }
 
       // Batch download via a single SFTP channel to avoid the per-file
       // open/close round-trip cost. Much faster than mapping
@@ -578,7 +659,7 @@ async function main() {
       const paths = filenames.map((f) => `${absBasePath}/${f}`);
       const contents = await fileTransfer.downloadFilesBulk(connInfo, paths);
 
-      const results: { filename: string; content: string }[] = [];
+      const results: BotConfigFileMetadata[] = [];
       for (let i = 0; i < filenames.length; i++) {
         const filename = filenames[i];
         const content = contents[i];
@@ -586,6 +667,20 @@ async function main() {
           log.warn({ agentId, filename }, 'Failed to download config file');
           continue;
         }
+        const existingFile = await fileRepo.findByPath(machine.id, `${workspace}/${filename}`);
+        if (existingFile?.localDirty) {
+          results.push({
+            id: existingFile.id,
+            filename,
+            relativePath: existingFile.relativePath,
+            content: existingFile.content ?? '',
+            localDirty: existingFile.localDirty,
+            remoteDirty: existingFile.remoteDirty,
+            updatedAt: existingFile.updatedAt,
+          });
+          continue;
+        }
+
         const contentHash = hashContent(content);
         await fileRepo.upsertFile({
           machineId: machine.id,
@@ -598,7 +693,18 @@ async function main() {
           localDirty: false,
           remoteDirty: false,
         });
-        results.push({ filename, content });
+        const savedFile = await fileRepo.findByPath(machine.id, `${workspace}/${filename}`);
+        if (savedFile) {
+          results.push({
+            id: savedFile.id,
+            filename,
+            relativePath: savedFile.relativePath,
+            content: savedFile.content ?? '',
+            localDirty: savedFile.localDirty,
+            remoteDirty: savedFile.remoteDirty,
+            updatedAt: savedFile.updatedAt,
+          });
+        }
       }
 
       // Stamp the agent's last sync time so the UI can show an accurate
@@ -609,19 +715,60 @@ async function main() {
         await agentRepo.updateSyncTime(agent.id);
       }
 
-      return { data: results, lastSyncedAt: new Date().toISOString() };
+      return { data: results.map(formatBotConfigFile), lastSyncedAt: new Date().toISOString() };
     } catch (err) {
       // If SSH fails but we have cached data, return stale cache
-      if (cachedFiles.length > 0) {
+      if (cachedConfigFiles.length > 0) {
         log.warn({ agentId, err }, 'SSH refresh failed, returning cached config files');
         return {
-          data: cachedFiles.map(({ filename, content }) => ({ filename, content })),
-          lastSyncedAt: cachedFiles[0].updatedAt.toISOString(),
+          data: cachedConfigFiles.map(formatBotConfigFile),
+          lastSyncedAt: cachedConfigFiles[0].updatedAt.toISOString(),
           stale: true,
         };
       }
       throw err;
     }
+  });
+
+  fastify.put('/api/agents/:agentId/config-files/:filename', async (request) => {
+    const { agentId, filename: rawFilename } = request.params as { agentId: string; filename: string };
+    const { content } = request.body as { content?: unknown };
+    if (typeof content !== 'string') {
+      throw new AppError('content must be a string', 'VALIDATION_ERROR', 400);
+    }
+
+    const filename = validateBotConfigFilename(rawFilename);
+    const agent = await agentRepo.findById(agentId);
+    if (!agent) throw new AppError('Agent not found', 'NOT_FOUND', 404);
+
+    const machine = await machineRepo.findById(agent.machineId);
+    if (!machine) throw new AppError('Machine not found', 'NOT_FOUND', 404);
+
+    const workspace = agent.workspacePath ?? 'workspace';
+    const relativePath = `${workspace}/${filename}`;
+    const existing = await fileRepo.findByPath(machine.id, relativePath);
+
+    if (existing) {
+      await fileRepo.updateContent(existing.id, content);
+    } else {
+      await fileRepo.upsertFile({
+        machineId: machine.id,
+        relativePath,
+        content,
+        contentHash: hashContent(content),
+        remoteHash: null,
+        remoteMtime: null,
+        remoteSize: null,
+        localDirty: true,
+        remoteDirty: false,
+      });
+    }
+
+    const updated = await fileRepo.findByPath(machine.id, relativePath);
+    if (!updated) throw new AppError('Config file not found after update', 'NOT_FOUND', 404);
+
+    log.info({ agentId, filename, relativePath }, 'Bot config file updated in DB mirror');
+    return { data: formatManagedBotConfigFile(updated) };
   });
 
   // --- Re-discover skills for an agent's machine ---

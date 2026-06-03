@@ -36,9 +36,12 @@ export interface PushResult {
   operationId: string;
   status: string;
   syncMode: SyncMode;
+  totalFiles?: number;
   syncedFiles: number;
   failedFiles: number;
-  gatewayRestarted: boolean;
+  requiresRestart?: boolean;
+  restartPerformed?: boolean;
+  gatewayRestarted?: boolean;
   durationMs: number;
 }
 

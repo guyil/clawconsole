@@ -79,6 +79,11 @@ export const agentsApi = {
       })
       .then((r) => r.data),
 
+  updateConfigFile: (agentId: string, filename: string, content: string) =>
+    api
+      .put<{ data: AgentConfigFile }>(`/agents/${agentId}/config-files/${encodeURIComponent(filename)}`, { content })
+      .then((r) => r.data),
+
   getMemoryFiles: (agentId: string, options?: { refresh?: boolean }) =>
     api
       .get<MemoryFilesResponse>(`/agents/${agentId}/memory-files`, {

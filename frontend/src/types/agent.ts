@@ -76,8 +76,13 @@ export interface AgentDetail extends Agent {
 }
 
 export interface AgentConfigFile {
+  id: string;
   filename: string;
+  relativePath: string;
   content: string;
+  localDirty: boolean;
+  remoteDirty: boolean;
+  updatedAt?: string;
 }
 
 export interface ProvisionChannelInput {

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { agentsApi } from '../api/agents.api';
-import { useAgent, useAgentConfigFiles, useAgentMemoryFiles, useProvisionAgent, useUpdateAgent, useToggleAgentOssSync, agentKeys } from '../hooks/useAgents';
+import { syncApi } from '../api/sync.api';
+import { useAgent, useAgentConfigFiles, useAgentMemoryFiles, useProvisionAgent, useUpdateAgent, useToggleAgentOssSync, useUpdateAgentConfigFile, agentKeys } from '../hooks/useAgents';
 import { useAgentSkills, useSkills, useInstallSkill, useRemoveSkillFromAgent, useRemoveDiscoveredSkill, useRemoveGlobalSkill, useRediscoverSkills } from '../hooks/useSkills';
 import { StatusDot } from '../components/ui/StatusDot';
 import { Badge } from '../components/ui/Badge';
@@ -13,11 +14,12 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { BotConfigChatPanel, ConfigDiffPreview } from '../components/bot-config';
 import { MemoryTab } from '../components/memory';
 import { ModelConfigTab } from '../components/bots/ModelConfigTab';
-import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles, Rocket, RefreshCw, Activity, Brain, Cpu, Dna, Share2, Pencil, Check, X } from 'lucide-react';
+import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles, Rocket, RefreshCw, Activity, Brain, Cpu, Dna, Share2, Pencil, Check, X, Save, UploadCloud } from 'lucide-react';
 import type { SkillCatalogEntry } from '../types/skill';
 import EvoClawTab from '../components/bots/EvoClawTab';
 import { DistillBundlePreviewModal } from '../components/bots/DistillBundlePreviewModal';
 import { DistillStatusModal } from '../components/bots/DistillStatusModal';
+import toast from 'react-hot-toast';
 
 const statusLabels: Record<string, string> = {
   draft: '草稿',
@@ -67,9 +69,12 @@ export function BotDetailPage() {
   const provisionAgent = useProvisionAgent();
   const updateAgent = useUpdateAgent();
   const toggleOssSync = useToggleAgentOssSync();
+  const updateConfigFile = useUpdateAgentConfigFile();
 
   const [activeTab, setActiveTab] = useState<Tab>('config');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [configDrafts, setConfigDrafts] = useState<Record<string, string>>({});
+  const [syncingConfig, setSyncingConfig] = useState(false);
   const [skillToRemove, setSkillToRemove] = useState<{ key: string; type: 'agent' | 'global' } | null>(null);
   const [autoSyncing, setAutoSyncing] = useState(false);
   const [showDistillModal, setShowDistillModal] = useState(false);
@@ -84,6 +89,7 @@ export function BotDetailPage() {
 
   const queryClient = useQueryClient();
   const syncedAgentIdRef = useRef<string | null>(null);
+  const configServerContentRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!agentId) return;
@@ -115,6 +121,27 @@ export function BotDetailPage() {
       cancelled = true;
     };
   }, [agentId, queryClient]);
+
+  useEffect(() => {
+    const files = [...(configData?.data ?? [])]
+      .filter((f) => !isMemoryFile(f.filename))
+      .sort((a, b) => fileSortKey(a.filename) - fileSortKey(b.filename));
+
+    setConfigDrafts((prev) => {
+      const next = { ...prev };
+      for (const file of files) {
+        const previousServerContent = configServerContentRef.current[file.filename];
+        if (next[file.filename] === undefined || next[file.filename] === previousServerContent) {
+          next[file.filename] = file.content;
+        }
+      }
+      return next;
+    });
+
+    configServerContentRef.current = Object.fromEntries(
+      files.map((file) => [file.filename, file.content]),
+    );
+  }, [configData]);
 
   if (isLoading || !agent) return <PageSpinner />;
 
@@ -158,18 +185,60 @@ export function BotDetailPage() {
   const sortedFiles = [...configFiles].sort((a, b) => fileSortKey(a.filename) - fileSortKey(b.filename));
 
   const activeFile = selectedFile ?? sortedFiles[0]?.filename ?? null;
-  const activeContent = sortedFiles.find((f) => f.filename === activeFile)?.content ?? '';
+  const activeFileData = sortedFiles.find((f) => f.filename === activeFile) ?? null;
+  const activeContent = activeFileData?.content ?? '';
+  const activeDraft = activeFile ? (configDrafts[activeFile] ?? activeContent) : '';
+  const activeUnsaved = Boolean(activeFile && activeDraft !== activeContent);
+  const hasUnsavedConfigDrafts = sortedFiles.some((f) => (configDrafts[f.filename] ?? f.content) !== f.content);
+  const dirtyConfigFiles = sortedFiles.filter((f) => f.localDirty);
+  const dirtyRelativePaths = dirtyConfigFiles.map((f) => f.relativePath);
 
   const installedSkills = agentSkillsData?.data ?? [];
   const installedIds = new Set(installedSkills.map((s) => s.skillCatalogId));
   const allApprovedSkills: SkillCatalogEntry[] = allSkillsData?.data ?? [];
   const availableSkills = allApprovedSkills.filter((s) => !installedIds.has(s.id));
 
-  const globalSkills: string[] = (agent as Record<string, unknown>).globalSkills as string[] ?? [];
+  const globalSkills: string[] = agent.globalSkills ?? [];
   const agentOwnSkills: string[] = agent.discoveredSkills ?? [];
   const totalDiscoveredSkills = globalSkills.length + agentOwnSkills.length;
 
   const memoryFileCount = memoryData?.totalFiles ?? 0;
+
+  const saveActiveConfigFile = () => {
+    if (!agentId || !activeFile || !activeUnsaved) return;
+    updateConfigFile.mutate(
+      { agentId, filename: activeFile, content: activeDraft },
+      {
+        onSuccess: (result) => {
+          setConfigDrafts((prev) => ({ ...prev, [result.data.filename]: result.data.content }));
+          configServerContentRef.current[result.data.filename] = result.data.content;
+        },
+      },
+    );
+  };
+
+  const syncConfigFiles = async () => {
+    if (!agentId || dirtyRelativePaths.length === 0) return;
+    setSyncingConfig(true);
+    try {
+      const result = await syncApi.push(agent.machineId, { files: dirtyRelativePaths });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: agentKeys.configFiles(agentId) }),
+        queryClient.invalidateQueries({ queryKey: agentKeys.detail(agentId) }),
+      ]);
+
+      if (result.requiresRestart || result.restartPerformed || result.gatewayRestarted) {
+        toast.success(`配置已同步: ${result.syncedFiles} 个文件，变更需要重启/已触发重启`);
+      } else {
+        toast.success(`配置已热同步: ${result.syncedFiles} 个文件，无需重启`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`同步失败: ${message}`);
+    } finally {
+      setSyncingConfig(false);
+    }
+  };
 
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
     { id: 'config', label: '身份配置', icon: FileText, count: sortedFiles.length },
@@ -459,41 +528,102 @@ export function BotDetailPage() {
               该 Bot 尚未配置身份文件
             </div>
           ) : (
-            <div className="flex gap-4 h-[500px]">
-              <div className="w-52 shrink-0 overflow-auto border border-claw-border rounded-xl bg-claw-input">
-                <div className="px-3 py-2 text-xs text-claw-muted font-semibold border-b border-claw-border">
-                  配置文件 ({sortedFiles.length})
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  {dirtyConfigFiles.length > 0 ? (
+                    <Badge variant="warning">有未同步修改 · 需要同步生效</Badge>
+                  ) : (
+                    <Badge variant="success">已同步</Badge>
+                  )}
+                  {hasUnsavedConfigDrafts && <Badge variant="info">有未保存草稿</Badge>}
                 </div>
-                {sortedFiles.map((f) => (
-                  <button
-                    key={f.filename}
-                    onClick={() => setSelectedFile(f.filename)}
-                    className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 border-b border-claw-border last:border-0 cursor-pointer transition-colors
-                      ${activeFile === f.filename ? 'bg-claw-primary/15 text-claw-primary-light' : 'text-claw-text hover:bg-claw-card'}`}
-                  >
-                    <FileText size={14} />
-                    <span className="truncate">{f.filename}</span>
-                  </button>
-                ))}
+                <Button
+                  size="sm"
+                  icon={<UploadCloud size={14} />}
+                  loading={syncingConfig}
+                  disabled={dirtyRelativePaths.length === 0 || syncingConfig}
+                  onClick={syncConfigFiles}
+                >
+                  同步配置到 Bot
+                </Button>
               </div>
 
-              <div className="flex-1 flex flex-col border border-claw-border rounded-xl overflow-hidden">
-                {activeFile ? (
-                  <>
-                    <div className="flex items-center px-4 py-2 bg-claw-input border-b border-claw-border">
-                      <span className="text-sm text-claw-text font-medium">{activeFile}</span>
-                      <Badge variant="muted" className="ml-2">只读</Badge>
-                    </div>
-                    <pre className="flex-1 bg-claw-bg text-claw-text text-sm p-4 overflow-auto font-mono whitespace-pre-wrap">
-                      {activeContent}
-                    </pre>
-                  </>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center text-claw-muted text-sm">
-                    选择一个文件查看
+              <div className="flex gap-4 h-[500px]">
+                <div className="w-52 shrink-0 overflow-auto border border-claw-border rounded-xl bg-claw-input">
+                  <div className="px-3 py-2 text-xs text-claw-muted font-semibold border-b border-claw-border">
+                    配置文件 ({sortedFiles.length})
                   </div>
-                )}
+                  {sortedFiles.map((f) => {
+                    const fileUnsaved = (configDrafts[f.filename] ?? f.content) !== f.content;
+                    return (
+                      <button
+                        key={f.filename}
+                        onClick={() => setSelectedFile(f.filename)}
+                        className={`w-full text-left px-3 py-2.5 text-sm flex items-center gap-2 border-b border-claw-border last:border-0 cursor-pointer transition-colors
+                          ${activeFile === f.filename ? 'bg-claw-primary/15 text-claw-primary-light' : 'text-claw-text hover:bg-claw-card'}`}
+                      >
+                        <FileText size={14} className="shrink-0" />
+                        <span className="truncate flex-1">{f.filename}</span>
+                        {fileUnsaved ? (
+                          <span className="w-2 h-2 rounded-full bg-claw-primary-light shrink-0" title="未保存" />
+                        ) : f.localDirty ? (
+                          <span className="w-2 h-2 rounded-full bg-claw-warning shrink-0" title="待同步" />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex-1 flex flex-col border border-claw-border rounded-xl overflow-hidden">
+                  {activeFile ? (
+                    <>
+                      <div className="flex items-center justify-between gap-3 px-4 py-2 bg-claw-input border-b border-claw-border">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm text-claw-text font-medium truncate">{activeFile}</span>
+                          {activeUnsaved ? (
+                            <Badge variant="info" className="shrink-0">未保存</Badge>
+                          ) : (
+                            <Badge variant="success" className="shrink-0">已保存</Badge>
+                          )}
+                          {activeFileData?.localDirty && (
+                            <Badge variant="warning" className="shrink-0">待同步</Badge>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          icon={<Save size={14} />}
+                          loading={updateConfigFile.isPending}
+                          disabled={!activeUnsaved || updateConfigFile.isPending}
+                          onClick={saveActiveConfigFile}
+                        >
+                          保存
+                        </Button>
+                      </div>
+                      <textarea
+                        value={activeDraft}
+                        onChange={(e) => {
+                          if (!activeFile) return;
+                          setConfigDrafts((prev) => ({ ...prev, [activeFile]: e.target.value }));
+                        }}
+                        spellCheck={false}
+                        className="flex-1 bg-claw-bg text-claw-text text-sm p-4 overflow-auto font-mono resize-none outline-none focus:ring-1 focus:ring-inset focus:ring-claw-primary/60"
+                        aria-label={`${activeFile} 配置内容`}
+                      />
+                    </>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center text-claw-muted text-sm">
+                      选择一个文件编辑
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {dirtyConfigFiles.length > 0 && (
+                <div className="text-xs text-claw-warning">
+                  待同步文件: {dirtyConfigFiles.map((f) => f.filename).join(', ')}
+                </div>
+              )}
             </div>
           )}
         </>
