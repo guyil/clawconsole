@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
-import { useAgentsByMachine } from '../../../hooks/useAgents';
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { useAgentsByMachine, useAllAgents } from '../../../hooks/useAgents';
+import { AlertCircle, CheckCircle, Copy, ChevronDown } from 'lucide-react';
+import type { AgentWithMachine } from '../../../types/agent';
 
 export interface BotInfoData {
   agentId: string;
   name: string;
   description: string;
   isDefault: boolean;
+  copyFromAgentId?: string;
 }
 
 interface BotInfoStepProps {
@@ -20,13 +22,22 @@ const AGENT_ID_REGEX = /^[a-z][a-z0-9_-]{1,49}$/;
 
 export function BotInfoStep({ machineId, data, onChange, onValidChange }: BotInfoStepProps) {
   const { data: existingAgents } = useAgentsByMachine(machineId);
+  const { data: allAgents } = useAllAgents();
   const [touched, setTouched] = useState(false);
+  const [copyEnabled, setCopyEnabled] = useState(!!data.copyFromAgentId);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const existingIds = (existingAgents?.data ?? []).map((a) => a.agentId);
   const isDuplicate = existingIds.includes(data.agentId);
   const isFormatValid = AGENT_ID_REGEX.test(data.agentId);
   const isIdValid = data.agentId.length > 0 && isFormatValid && !isDuplicate;
   const hasDefault = (existingAgents?.data ?? []).some((a) => a.isDefault);
+
+  const availableBots = (allAgents?.data ?? []).filter(
+    (a) => a.status === 'online' || a.status === 'offline' || a.status === 'degraded',
+  );
+
+  const selectedSourceBot = availableBots.find((a) => a.id === data.copyFromAgentId);
 
   const workspacePath = data.agentId
     ? data.isDefault
@@ -42,8 +53,105 @@ export function BotInfoStep({ machineId, data, onChange, onValidChange }: BotInf
     onChange({ ...data, ...partial });
   };
 
+  const handleToggleCopy = () => {
+    const next = !copyEnabled;
+    setCopyEnabled(next);
+    if (!next) {
+      update({ copyFromAgentId: undefined });
+    }
+  };
+
+  const handleSelectSourceBot = (bot: AgentWithMachine) => {
+    update({
+      copyFromAgentId: bot.id,
+      name: data.name || bot.name || '',
+      description: data.description || bot.description || '',
+    });
+    setDropdownOpen(false);
+  };
+
   return (
     <div className="space-y-5">
+      {/* Copy from existing bot */}
+      <div className="rounded-lg border border-claw-border bg-claw-bg p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Copy size={14} className="text-claw-primary-light" />
+            <div>
+              <div className="text-sm font-medium text-claw-text">从现有 Bot 复制</div>
+              <div className="text-[11px] text-claw-muted">复制 SOUL、IDENTITY 等所有配置文件和 Model 配置</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={copyEnabled}
+            onClick={handleToggleCopy}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+              copyEnabled ? 'bg-claw-primary' : 'bg-claw-border'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                copyEnabled ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+
+        {copyEnabled && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="w-full flex items-center justify-between px-3 py-2 text-sm bg-claw-card border border-claw-border rounded-lg text-left hover:border-claw-primary/40 transition-colors"
+            >
+              {selectedSourceBot ? (
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="font-medium text-claw-text truncate">
+                    {selectedSourceBot.name || selectedSourceBot.agentId}
+                  </span>
+                  <span className="text-claw-muted text-xs shrink-0">
+                    @ {selectedSourceBot.machineName}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-claw-muted">选择要复制的 Bot...</span>
+              )}
+              <ChevronDown size={14} className={`text-claw-muted transition-transform shrink-0 ${dropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {dropdownOpen && (
+              <div className="absolute z-20 mt-1 w-full bg-claw-card border border-claw-border rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                {availableBots.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-claw-muted">暂无可用的 Bot</div>
+                ) : (
+                  availableBots.map((bot) => (
+                    <button
+                      key={bot.id}
+                      type="button"
+                      onClick={() => handleSelectSourceBot(bot)}
+                      className={`w-full px-3 py-2 text-left hover:bg-claw-bg transition-colors first:rounded-t-lg last:rounded-b-lg ${
+                        bot.id === data.copyFromAgentId ? 'bg-claw-primary/10' : ''
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-claw-text">
+                        {bot.name || bot.agentId}
+                      </div>
+                      <div className="text-[11px] text-claw-muted flex items-center gap-2">
+                        <span>{bot.agentId}</span>
+                        <span>@</span>
+                        <span>{bot.machineName}</span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Bot ID */}
       <div>
         <label className="block text-sm font-medium text-claw-text mb-1.5">

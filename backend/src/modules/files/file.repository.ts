@@ -28,6 +28,31 @@ export class FileRepository implements FileRepositoryInterface {
     }));
   }
 
+  /**
+   * Same as ``findByMachineId`` but skips the (potentially huge) ``content``
+   * column. Use this on hot paths that only need hash-level diffing — e.g.
+   * the auto-pull job, which doesn't read local content but used to OOM the
+   * backend by loading thousands of file bodies into a single array.
+   *
+   * The returned ``content`` is always ``null`` so callers can still use the
+   * same ``LocalFileState`` shape; conflict-handling code that *does* need
+   * the body should use ``findById`` to fetch on demand.
+   */
+  async findByMachineIdLight(machineId: string): Promise<LocalFileState[]> {
+    const rows = await this.db('managed_files')
+      .where('machine_id', machineId)
+      .select('id', 'relative_path', 'content_hash', 'remote_hash', 'local_dirty');
+
+    return rows.map((row) => ({
+      id: row.id,
+      relativePath: row.relative_path,
+      contentHash: row.content_hash,
+      remoteHash: row.remote_hash,
+      localDirty: Boolean(row.local_dirty),
+      content: null,
+    }));
+  }
+
   async findById(id: string): Promise<ManagedFile | null> {
     const row = await this.db('managed_files').where('id', id).first();
     return row ? this.toManagedFile(row) : null;
@@ -63,6 +88,9 @@ export class FileRepository implements FileRepositoryInterface {
     const rows = await this.db('managed_files')
       .where('machine_id', machineId)
       .where('relative_path', 'like', `${workspacePath}/%.md`)
+      .whereNot('relative_path', 'like', `${workspacePath}/memory/%.md`)
+      .whereNot('relative_path', `${workspacePath}/MEMORY.md`)
+      .whereNot('relative_path', `${workspacePath}/memory.md`)
       .whereNotNull('content')
       .select('relative_path', 'content', 'updated_at')
       .orderBy('relative_path', 'asc');

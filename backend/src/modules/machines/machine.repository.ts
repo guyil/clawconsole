@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, type Knex } from '../../shared/db.js';
+import type { AgentModelConfig } from '../agents/agent.types.js';
 import type { Machine, CreateMachineInput, UpdateMachineInput, MachineStatus } from './machine.types.js';
 
 export class MachineRepository {
@@ -48,9 +49,17 @@ export class MachineRepository {
     const id = uuidv4();
     const now = new Date();
 
+    const fallbackAlias = (input.name || `claw-${id.split('-')[0]}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/(^-+|-+$)/g, '')
+      .slice(0, 64);
+
     await this.db('machines').insert({
       id,
       name: input.name,
+      alias: input.alias ?? fallbackAlias,
       tailscale_hostname: input.tailscaleHostname,
       ssh_user: input.sshUser ?? 'claw',
       ssh_port: input.sshPort ?? 22,
@@ -68,6 +77,7 @@ export class MachineRepository {
   async update(id: string, input: UpdateMachineInput): Promise<Machine | null> {
     const updates: Record<string, unknown> = { updated_at: new Date() };
     if (input.name !== undefined) updates.name = input.name;
+    if (input.alias !== undefined) updates.alias = input.alias;
     if (input.sshUser !== undefined) updates.ssh_user = input.sshUser;
     if (input.sshPort !== undefined) updates.ssh_port = input.sshPort;
     if (input.sshPassword !== undefined) updates.ssh_password = input.sshPassword;
@@ -102,15 +112,31 @@ export class MachineRepository {
     });
   }
 
+  async updateModelConfig(id: string, modelConfig: AgentModelConfig | null): Promise<void> {
+    await this.db('machines').where('id', id).update({
+      model_config: modelConfig ? JSON.stringify(modelConfig) : null,
+      updated_at: new Date(),
+    });
+  }
+
   async delete(id: string): Promise<boolean> {
     const deleted = await this.db('machines').where('id', id).delete();
     return deleted > 0;
   }
 
   private toMachine(row: Record<string, unknown>): Machine {
+    const rawModelConfig = row.model_config;
+    let modelConfig: AgentModelConfig | null = null;
+    if (rawModelConfig) {
+      modelConfig = typeof rawModelConfig === 'string'
+        ? JSON.parse(rawModelConfig)
+        : rawModelConfig as AgentModelConfig;
+    }
+
     return {
       id: row.id as string,
       name: row.name as string,
+      alias: (row.alias as string | null) ?? null,
       tailscaleHostname: row.tailscale_hostname as string,
       tailscaleIp: row.tailscale_ip as string | null,
       sshUser: row.ssh_user as string,
@@ -128,6 +154,7 @@ export class MachineRepository {
           ? JSON.parse(row.discovered_skills)
           : row.discovered_skills as string[])
         : null,
+      modelConfig,
       createdAt: new Date(row.created_at as string),
       updatedAt: new Date(row.updated_at as string),
     };

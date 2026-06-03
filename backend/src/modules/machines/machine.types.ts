@@ -1,8 +1,16 @@
+import type { AgentModelConfig } from '../agents/agent.types.js';
+
 export type MachineStatus = 'online' | 'offline' | 'unknown';
 
 export interface Machine {
   id: string;
   name: string;
+  /**
+   * Human-readable globally-unique alias used as the prefix in
+   * distilled Mini Claw `agent_key`s (e.g. `oc-<alias>-<agentId>`).
+   * Backfilled to a slug of `name` for legacy rows by migration 025.
+   */
+  alias: string | null;
   tailscaleHostname: string;
   tailscaleIp: string | null;
   sshUser: string;
@@ -16,12 +24,14 @@ export interface Machine {
   lastHealthCheckAt: Date | null;
   tags: string[] | null;
   discoveredSkills: string[] | null;
+  modelConfig: AgentModelConfig | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateMachineInput {
   name: string;
+  alias?: string;
   tailscaleHostname: string;
   sshUser?: string;
   sshPort?: number;
@@ -32,6 +42,7 @@ export interface CreateMachineInput {
 
 export interface UpdateMachineInput {
   name?: string;
+  alias?: string;
   sshUser?: string;
   sshPort?: number;
   sshPassword?: string | null;

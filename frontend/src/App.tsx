@@ -1,5 +1,5 @@
 import { Routes, Route } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import { DashboardPage } from './pages/DashboardPage';
 import { MachinesPage } from './pages/MachinesPage';
@@ -15,12 +15,49 @@ import { SettingsPage } from './pages/SettingsPage';
 import { MonitoringDashboardPage } from './pages/MonitoringDashboardPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { LogsPage } from './pages/LogsPage';
+import { SummariesPage } from './pages/SummariesPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
+import { LoginPage } from './pages/LoginPage';
 import { useWebSocketStore } from './stores/websocket.store';
 import { useWebSocketQuerySync } from './hooks/useWebSocketQuerySync';
+import { getToken, verifyMe } from './api/auth.api';
+import { PageSpinner } from './components/ui/Spinner';
+
+type AuthState = 'checking' | 'authenticated' | 'unauthenticated';
 
 export default function App() {
+  // Auth gate runs BEFORE any route mounts so data hooks never fire
+  // without a token. We ping /api/auth/me once on boot to confirm the
+  // cached token is still alive — covers the "token expired while the
+  // tab sat idle overnight" case.
+  const [authState, setAuthState] = useState<AuthState>(() =>
+    getToken() ? 'checking' : 'unauthenticated',
+  );
+
+  useEffect(() => {
+    if (authState !== 'checking') return;
+    let cancelled = false;
+    verifyMe().then((ok) => {
+      if (cancelled) return;
+      setAuthState(ok ? 'authenticated' : 'unauthenticated');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState]);
+
+  if (authState === 'checking') {
+    return <PageSpinner />;
+  }
+  if (authState === 'unauthenticated') {
+    return <LoginPage onSuccess={() => setAuthState('authenticated')} />;
+  }
+
+  return <AuthedApp />;
+}
+
+function AuthedApp() {
   const connect = useWebSocketStore((s) => s.connect);
 
   useEffect(() => {
@@ -46,6 +83,7 @@ export default function App() {
         <Route path="monitoring" element={<MonitoringDashboardPage />} />
         <Route path="monitoring/sessions" element={<SessionsPage />} />
         <Route path="monitoring/logs" element={<LogsPage />} />
+        <Route path="monitoring/summaries" element={<SummariesPage />} />
         <Route path="workflows" element={<WorkflowsPage />} />
         <Route path="workflows/:workflowId" element={<WorkflowEditorPage />} />
       </Route>

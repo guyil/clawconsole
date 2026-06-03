@@ -258,7 +258,7 @@ function createGetSyncHistoryTool(deps: AssistantToolDeps): LangGraphToolDef {
       try {
         const machineId = args.machineId as string;
         const limit = Number(args.limit) || 10;
-        const operations = await deps.syncRepo.findOperationsByMachine(machineId, limit);
+        const operations = await deps.syncRepo.findOperationsByMachine(machineId, { limit });
 
         if (operations.length === 0) return `No sync operations found for machine ${machineId}`;
         return JSON.stringify(operations, null, 2);

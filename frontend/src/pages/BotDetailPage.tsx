@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useAgent, useAgentConfigFiles, useAgentMemoryFiles, useProvisionAgent } from '../hooks/useAgents';
+import { useQueryClient } from '@tanstack/react-query';
+import { agentsApi } from '../api/agents.api';
+import { useAgent, useAgentConfigFiles, useAgentMemoryFiles, useProvisionAgent, useUpdateAgent, useToggleAgentOssSync, agentKeys } from '../hooks/useAgents';
 import { useAgentSkills, useSkills, useInstallSkill, useRemoveSkillFromAgent, useRemoveDiscoveredSkill, useRemoveGlobalSkill, useRediscoverSkills } from '../hooks/useSkills';
 import { StatusDot } from '../components/ui/StatusDot';
 import { Badge } from '../components/ui/Badge';
@@ -10,8 +12,12 @@ import { PageSpinner, Spinner } from '../components/ui/Spinner';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { BotConfigChatPanel, ConfigDiffPreview } from '../components/bot-config';
 import { MemoryTab } from '../components/memory';
-import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles, Rocket, RefreshCw, Activity, Brain } from 'lucide-react';
+import { ModelConfigTab } from '../components/bots/ModelConfigTab';
+import { ChevronLeft, FileText, Bot, Puzzle, Plus, Trash2, Globe, User, Sparkles, Rocket, RefreshCw, Activity, Brain, Cpu, Dna, Share2, Pencil, Check, X } from 'lucide-react';
 import type { SkillCatalogEntry } from '../types/skill';
+import EvoClawTab from '../components/bots/EvoClawTab';
+import { DistillBundlePreviewModal } from '../components/bots/DistillBundlePreviewModal';
+import { DistillStatusModal } from '../components/bots/DistillStatusModal';
 
 const statusLabels: Record<string, string> = {
   draft: '草稿',
@@ -34,14 +40,16 @@ const FILE_DISPLAY_ORDER = [
   'README.md',
 ];
 
-const MEMORY_FILENAMES = new Set(['MEMORY.md', 'memory.md']);
+function isMemoryFile(filename: string): boolean {
+  return filename === 'MEMORY.md' || filename === 'memory.md' || filename.startsWith('memory/');
+}
 
 function fileSortKey(filename: string): number {
   const idx = FILE_DISPLAY_ORDER.indexOf(filename);
   return idx >= 0 ? idx : FILE_DISPLAY_ORDER.length;
 }
 
-type Tab = 'config' | 'ai-config' | 'memory' | 'skills';
+type Tab = 'config' | 'ai-config' | 'model' | 'memory' | 'skills' | 'evolution';
 
 export function BotDetailPage() {
   const { agentId } = useParams<{ agentId: string }>();
@@ -57,10 +65,56 @@ export function BotDetailPage() {
   const removeGlobalSkill = useRemoveGlobalSkill();
   const rediscoverSkills = useRediscoverSkills();
   const provisionAgent = useProvisionAgent();
+  const updateAgent = useUpdateAgent();
+  const toggleOssSync = useToggleAgentOssSync();
 
   const [activeTab, setActiveTab] = useState<Tab>('config');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [skillToRemove, setSkillToRemove] = useState<{ key: string; type: 'agent' | 'global' } | null>(null);
+  const [autoSyncing, setAutoSyncing] = useState(false);
+  const [showDistillModal, setShowDistillModal] = useState(false);
+  const [showDistillStatus, setShowDistillStatus] = useState(false);
+
+  // Inline name editing. ``draftName`` is the buffered value while the
+  // textbox is open; it is seeded from ``agent.name`` on entry so an
+  // unmodified Save still works (and an empty submit clears the field
+  // back to ``null`` so the header falls through to ``agent.agentId``).
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState('');
+
+  const queryClient = useQueryClient();
+  const syncedAgentIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!agentId) return;
+    if (syncedAgentIdRef.current === agentId) return;
+    syncedAgentIdRef.current = agentId;
+
+    let cancelled = false;
+    setAutoSyncing(true);
+
+    Promise.allSettled([
+      agentsApi.getConfigFiles(agentId, { refresh: true }),
+      agentsApi.getMemoryFiles(agentId, { refresh: true }),
+    ])
+      .then(([configResult, memoryResult]) => {
+        if (cancelled) return;
+        if (configResult.status === 'fulfilled') {
+          queryClient.setQueryData(agentKeys.configFiles(agentId), configResult.value);
+        }
+        if (memoryResult.status === 'fulfilled') {
+          queryClient.setQueryData(agentKeys.memoryFiles(agentId), memoryResult.value);
+        }
+        queryClient.invalidateQueries({ queryKey: agentKeys.detail(agentId) });
+      })
+      .finally(() => {
+        if (!cancelled) setAutoSyncing(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, queryClient]);
 
   if (isLoading || !agent) return <PageSpinner />;
 
@@ -68,9 +122,39 @@ export function BotDetailPage() {
     provisionAgent.mutate({ agentId: agentId! });
   };
 
+  const startEditName = () => {
+    setDraftName(agent.name ?? '');
+    setEditingName(true);
+  };
+
+  const cancelEditName = () => {
+    setEditingName(false);
+    setDraftName('');
+  };
+
+  const submitEditName = () => {
+    const next = draftName.trim();
+    // No-op when the user didn't actually change anything — saves a
+    // backend round-trip and avoids a stray "已保存" toast.
+    if (next === (agent.name ?? '')) {
+      cancelEditName();
+      return;
+    }
+    updateAgent.mutate(
+      // Empty string → null so the header falls back to ``agent.agentId``.
+      { agentId: agentId!, data: { name: next === '' ? null : next } },
+      {
+        onSuccess: () => {
+          setEditingName(false);
+          setDraftName('');
+        },
+      },
+    );
+  };
+
   const isTransitioning = agent.status === 'packaging' || agent.status === 'syncing';
 
-  const configFiles = (configData?.data ?? []).filter((f) => !MEMORY_FILENAMES.has(f.filename));
+  const configFiles = (configData?.data ?? []).filter((f) => !isMemoryFile(f.filename));
   const sortedFiles = [...configFiles].sort((a, b) => fileSortKey(a.filename) - fileSortKey(b.filename));
 
   const activeFile = selectedFile ?? sortedFiles[0]?.filename ?? null;
@@ -90,8 +174,10 @@ export function BotDetailPage() {
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
     { id: 'config', label: '身份配置', icon: FileText, count: sortedFiles.length },
     { id: 'ai-config', label: 'AI 配置助手', icon: Sparkles },
+    { id: 'model', label: 'Model 配置', icon: Cpu },
     { id: 'memory', label: '记忆管理', icon: Brain, count: memoryFileCount },
     { id: 'skills', label: 'Skills', icon: Puzzle, count: totalDiscoveredSkills + installedSkills.length },
+    { id: 'evolution', label: '自进化', icon: Dna },
   ];
 
   return (
@@ -112,9 +198,67 @@ export function BotDetailPage() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold text-claw-text">
-                  {agent.name || agent.agentId}
-                </h2>
+                {editingName ? (
+                  // Inline rename. The wrapping <form> gives us the
+                  // Enter-to-save / Esc-to-cancel keyboard behaviour for
+                  // free without manually wiring an onKeyDown for Enter,
+                  // and keeps screen-reader semantics correct.
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      submitEditName();
+                    }}
+                    className="flex items-center gap-1.5"
+                  >
+                    <input
+                      autoFocus
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelEditName();
+                        }
+                      }}
+                      maxLength={200}
+                      placeholder={agent.agentId}
+                      disabled={updateAgent.isPending}
+                      className="text-lg font-bold bg-claw-input border border-claw-primary/60 rounded-md px-2 py-0.5 text-claw-text focus:outline-none focus:border-claw-primary min-w-[14rem]"
+                    />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      icon={<Check size={13} />}
+                      loading={updateAgent.isPending}
+                      disabled={updateAgent.isPending}
+                    >
+                      保存
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      icon={<X size={13} />}
+                      onClick={cancelEditName}
+                      disabled={updateAgent.isPending}
+                    >
+                      取消
+                    </Button>
+                  </form>
+                ) : (
+                  <h2 className="text-lg font-bold text-claw-text flex items-center gap-1.5 group">
+                    <span>{agent.name || agent.agentId}</span>
+                    <button
+                      type="button"
+                      onClick={startEditName}
+                      title="重命名 Bot"
+                      aria-label="重命名 Bot"
+                      className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-1 rounded text-claw-muted hover:text-claw-primary-light"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </h2>
+                )}
                 <StatusDot status={agent.status === 'online' ? 'running' : agent.status === 'offline' ? 'offline' : 'paused'} />
               </div>
               <div className="text-sm text-claw-muted mt-0.5">
@@ -124,6 +268,15 @@ export function BotDetailPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Share2 size={14} />}
+              onClick={() => setShowDistillModal(true)}
+              title="预览蒸馏快照并推送到 Mini Claw 平台"
+            >
+              推送到 Mini Claw
+            </Button>
             {agent.status === 'draft' && (
               <Button
                 size="sm"
@@ -165,7 +318,7 @@ export function BotDetailPage() {
           </div>
         </div>
 
-        <div className="flex gap-6 mt-4 pt-4 border-t border-claw-border text-sm">
+        <div className="flex gap-6 mt-4 pt-4 border-t border-claw-border text-sm flex-wrap">
           <div>
             <span className="text-claw-muted">Workspace: </span>
             <span className="text-claw-text">{agent.workspacePath ?? '-'}</span>
@@ -176,6 +329,92 @@ export function BotDetailPage() {
               <span className="text-claw-text">
                 {new Date(agent.lastSyncedAt).toLocaleString()}
               </span>
+            </div>
+          )}
+          {/*
+            Surface the daily OSS distill state alongside the SSH "last
+            synced". They're independent timelines (SSH = file pull,
+            OSS = push to mini-claw vector backend) — keeping both
+            visible avoids the confusion of "I just synced, why is
+            mini-claw still serving stale memory?".
+          */}
+          <div>
+            <span className="text-claw-muted">最后蒸馏到 OSS: </span>
+            {agent.lastOssSyncAt ? (
+              <span
+                className={
+                  agent.lastOssSyncStatus === 'failed'
+                    ? 'text-claw-danger'
+                    : 'text-claw-text'
+                }
+                title={
+                  agent.lastOssSyncStatus === 'failed'
+                    ? agent.lastOssSyncError ?? '失败'
+                    : agent.lastOssVectorSha
+                      ? `vector_sha=${agent.lastOssVectorSha.slice(0, 12)}…  耗时=${
+                          agent.lastOssDurationMs ?? '?'
+                        }ms`
+                      : ''
+                }
+              >
+                {new Date(agent.lastOssSyncAt).toLocaleString()}
+                {agent.lastOssSyncStatus === 'failed' && ' · 失败'}
+              </span>
+            ) : agent.ossSyncEnabled ? (
+              <span className="text-claw-warning">尚未蒸馏</span>
+            ) : (
+              <span className="text-claw-muted">已退出每日同步</span>
+            )}
+          </div>
+          {/*
+            Per-bot opt-in for the nightly OSS distill cron. Off here
+            simply removes the bot from the scheduled run; the "推送到
+            Mini Claw" button above keeps working regardless, because
+            manual pushes are an explicit user action.
+          */}
+          <div className="flex items-center gap-2">
+            <span className="text-claw-muted">每日蒸馏到 OSS:</span>
+            <label
+              className="inline-flex items-center cursor-pointer"
+              title={
+                agent.ossSyncEnabled
+                  ? '点击关闭后，每日 03:00 (Asia/Shanghai) 的自动同步会跳过这个 Bot；手动推送不受影响。'
+                  : '点击开启后，下一次每日定时任务会把这个 Bot 也同步到 OSS。'
+              }
+            >
+              <input
+                type="checkbox"
+                checked={agent.ossSyncEnabled}
+                disabled={toggleOssSync.isPending}
+                onChange={(e) =>
+                  toggleOssSync.mutate({
+                    agentId: agent.id,
+                    enabled: e.target.checked,
+                  })
+                }
+                className="sr-only peer"
+                aria-label="切换每日蒸馏到 OSS"
+              />
+              <div className="w-9 h-5 bg-claw-border rounded-full peer-checked:bg-claw-primary relative transition-colors">
+                <div
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                    agent.ossSyncEnabled ? 'translate-x-4' : ''
+                  }`}
+                />
+              </div>
+            </label>
+            <span
+              className={`text-xs ${
+                agent.ossSyncEnabled ? 'text-claw-success' : 'text-claw-muted'
+              }`}
+            >
+              {agent.ossSyncEnabled ? '已启用' : '已禁用'}
+            </span>
+          </div>
+          {autoSyncing && (
+            <div className="flex items-center gap-1.5 text-claw-muted">
+              <Spinner size={12} />
+              正在同步远程节点...
             </div>
           )}
         </div>
@@ -273,6 +512,11 @@ export function BotDetailPage() {
             <ConfigDiffPreview agentId={agentId!} />
           </div>
         </div>
+      )}
+
+      {/* Model Config Tab */}
+      {activeTab === 'model' && (
+        <ModelConfigTab agentId={agentId!} machineId={agent.machineId} />
       )}
 
       {/* Memory Tab */}
@@ -475,6 +719,28 @@ export function BotDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Evolution Tab */}
+      {activeTab === 'evolution' && (
+        <EvoClawTab agentId={agentId!} machineId={agent.machineId} />
+      )}
+
+      <DistillBundlePreviewModal
+        open={showDistillModal}
+        onClose={() => setShowDistillModal(false)}
+        machineId={agent.machineId}
+        agentId={agentId!}
+        agentDisplayName={agent.name || agent.agentId}
+        onOpenDashboard={() => {
+          setShowDistillModal(false);
+          setShowDistillStatus(true);
+        }}
+      />
+
+      <DistillStatusModal
+        open={showDistillStatus}
+        onClose={() => setShowDistillStatus(false)}
+      />
 
       <ConfirmDialog
         open={!!skillToRemove}

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKEND_PORT=3000
-FRONTEND_PORT=5173
+BACKEND_PORT=8018
+FRONTEND_PORT=5810
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 RED='\033[0;31m'

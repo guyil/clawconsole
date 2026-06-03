@@ -152,12 +152,19 @@ export class SSHPool {
   async executeCommand(
     info: SSHConnectionInfo,
     command: string,
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs?: number; maxStdoutBytes?: number } = {},
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const client = await this.getConnection(info);
     try {
       return await new Promise((resolve, reject) => {
         const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
+        // Default cap: 64 MiB. Without this, a runaway command (e.g. a
+        // ``find … | sha256sum`` over a workspace with 100k+ files) would
+        // accumulate the entire stdout in the Node heap and OOM the
+        // backend container before the timer fires. Callers that legit
+        // need bigger output should pass an explicit higher number, OR
+        // (better) stream the data via SFTP instead of stdout.
+        const maxStdoutBytes = options.maxStdoutBytes ?? 64 * 1024 * 1024;
         const timer = setTimeout(() => {
           reject(new SSHError(info.machineId, command, `Command timed out after ${timeoutMs}ms`));
         }, timeoutMs);
@@ -169,15 +176,52 @@ export class SSHPool {
             return;
           }
 
-          let stdout = '';
-          let stderr = '';
+          // Buffer chunks then concat at close — avoids the O(n^2) cost of
+          // ``stdout += data.toString()`` on multi-MB output and lets us
+          // stop pulling early when ``maxStdoutBytes`` is reached.
+          const stdoutChunks: Buffer[] = [];
+          const stderrChunks: Buffer[] = [];
+          let stdoutBytes = 0;
+          let aborted = false;
 
-          stream.on('data', (data: Buffer) => { stdout += data.toString(); });
-          stream.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+          stream.on('data', (data: Buffer) => {
+            if (aborted) return;
+            stdoutBytes += data.length;
+            if (stdoutBytes > maxStdoutBytes) {
+              aborted = true;
+              clearTimeout(timer);
+              try {
+                // Force-close the channel; without this the remote side
+                // keeps producing data until natural EOF, and the bytes we
+                // already buffered would still leak via subsequent
+                // ``data`` events even after we reject.
+                stream.close();
+                stream.destroy();
+              } catch { /* ignore */ }
+              reject(
+                new SSHError(
+                  info.machineId,
+                  command,
+                  `stdout exceeded ${maxStdoutBytes} bytes (got at least ${stdoutBytes}); refusing to buffer more`,
+                ),
+              );
+              return;
+            }
+            stdoutChunks.push(data);
+          });
+          stream.stderr.on('data', (data: Buffer) => {
+            if (aborted) return;
+            stderrChunks.push(data);
+          });
 
           stream.on('close', (code: number) => {
+            if (aborted) return;
             clearTimeout(timer);
-            resolve({ stdout, stderr, exitCode: code ?? 0 });
+            resolve({
+              stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+              stderr: Buffer.concat(stderrChunks).toString('utf8'),
+              exitCode: code ?? 0,
+            });
           });
         });
       });

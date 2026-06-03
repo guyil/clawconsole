@@ -39,6 +39,7 @@ export interface SyncEngineDeps {
 
 export interface FileRepositoryInterface {
   findByMachineId(machineId: string): Promise<LocalFileState[]>;
+  findByMachineIdLight(machineId: string): Promise<LocalFileState[]>;
   upsertFile(params: {
     machineId: string;
     relativePath: string;
@@ -171,7 +172,10 @@ export class SyncEngine {
     const startTime = Date.now();
 
     const manifest = await this.collectManifest(connectionInfo, openclawHome);
-    const localFiles = await this.fileRepo.findByMachineId(machineId);
+    // Pull only needs hash-level diffing. Loading every file's body here on
+    // a 5k+ file machine would balloon the heap to several hundred MB and
+    // OOM the backend before a single byte is downloaded.
+    const localFiles = await this.fileRepo.findByMachineIdLight(machineId);
     const diff = this.diffEngine.computeDiff(localFiles, manifest);
 
     const filesToPull = [...diff.remoteNew, ...diff.remoteModified];
@@ -193,10 +197,23 @@ export class SyncEngine {
     let failedFiles = 0;
     const errors: SyncFileError[] = [];
 
+    // Hard cap matches manifest-collector's MANIFEST_MAX_FILE_BYTES (10MB).
+    // The cap normally fires upstream during manifest collection; this is a
+    // last-resort safety so a stale Redis-cached manifest with oversized
+    // entries can never OOM the backend mid-pull.
+    const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024;
+
     for (let i = 0; i < filesToPull.length; i++) {
       const entry = filesToPull[i];
       const opFileId = uuidv4();
       try {
+        if (entry.size > MAX_DOWNLOAD_BYTES) {
+          log.warn(
+            { machineId, relativePath: entry.relativePath, size: entry.size },
+            'Skipping pull: file exceeds 10MB cap',
+          );
+          continue;
+        }
         const remotePath = `${openclawHome}/${entry.relativePath}`;
         const content = await this.fileTransfer.downloadFile(connectionInfo, remotePath);
         const contentHash = hashContent(content);

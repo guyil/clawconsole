@@ -32,7 +32,7 @@ export class CredentialService {
   }
 
   async updateCredential(id: string, input: UpdateCredentialInput): Promise<Credential> {
-    const cred = await this.getCredential(id);
+    await this.getCredential(id);
 
     if (input.value) {
       await this.repo.updateValue(id, input.value);

@@ -1,5 +1,14 @@
 export type AgentStatus = 'draft' | 'packaging' | 'syncing' | 'online' | 'degraded' | 'offline' | 'archived';
 
+export type AgentModelValue = string | { primary: string; fallbacks?: string[] };
+
+export interface AgentModelConfig {
+  model: AgentModelValue;
+  lastSyncedAt?: string;
+}
+
+export type OssSyncStatus = 'ok' | 'failed';
+
 export interface Agent {
   id: string;
   machineId: string;
@@ -9,8 +18,25 @@ export interface Agent {
   isDefault: boolean;
   workspacePath: string | null;
   discoveredSkills: string[] | null;
+  modelConfig: AgentModelConfig | null;
   status: AgentStatus;
   lastSyncedAt: string | null;
+  /**
+   * Whether the daily ``daily-oss-backup`` cron includes this bot. Manual
+   * "推送到 Mini Claw" / "Push to OSS" actions ignore this flag — flipping
+   * it off only removes the bot from the nightly run.
+   */
+  ossSyncEnabled: boolean;
+  /** Wall-clock end time of the most recent OSS distill push. NULL = never. */
+  lastOssSyncAt: string | null;
+  /** 'ok' on success, 'failed' on any thrown error, NULL if never tried. */
+  lastOssSyncStatus: OssSyncStatus | null;
+  /** Truncated error message from the most recent failed push. */
+  lastOssSyncError: string | null;
+  /** sha256 of the vector sqlite uploaded by the most recent successful push. */
+  lastOssVectorSha: string | null;
+  /** Wall-clock duration in ms of the most recent push attempt. */
+  lastOssDurationMs: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,9 +49,19 @@ export interface CreateAgentInput {
 }
 
 export interface UpdateAgentInput {
-  name?: string;
-  description?: string;
+  /**
+   * `null` clears the field on the backend so the UI falls back to
+   * displaying ``agentId``. ``undefined`` leaves it unchanged.
+   */
+  name?: string | null;
+  description?: string | null;
   status?: AgentStatus;
+  modelConfig?: AgentModelConfig | null;
+  /**
+   * Toggle the per-bot opt-in for the nightly OSS distill cron.
+   * ``undefined`` leaves the stored value alone.
+   */
+  ossSyncEnabled?: boolean;
 }
 
 export interface AgentWithMachine extends Agent {
@@ -54,6 +90,7 @@ export interface ProvisionChannelInput {
 
 export interface ProvisionInput {
   channels?: ProvisionChannelInput[];
+  copyFromAgentId?: string;
 }
 
 export interface ProvisionEvent {

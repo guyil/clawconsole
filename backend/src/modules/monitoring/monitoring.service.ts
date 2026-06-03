@@ -10,6 +10,7 @@ import type {
   DiagnosticEventFilters,
   MonitoringDashboard,
 } from './monitoring.types.js';
+import { config } from '../../config/index.js';
 import { createChildLogger } from '../../shared/logger.js';
 
 const log = createChildLogger('monitoring-service');
@@ -19,7 +20,7 @@ export class MonitoringService {
     private repo: MonitoringRepository,
     private sessionMonitor: SessionMonitorService,
     private logCollector: LogCollectorService,
-    private gatewayPool: GatewayConnectorPool,
+    _gatewayPool: GatewayConnectorPool,
     private machineService: MachineService,
   ) {}
 
@@ -99,17 +100,20 @@ export class MonitoringService {
   // ─── Sync Triggers ───────────────────────────────────────────────
 
   /**
-   * Trigger a session sync for a specific machine.
+   * Trigger a session sync for a specific machine. Also pulls transcripts
+   * for sessions active in the configured summary window so the summaries
+   * page has actual conversation content (session metadata sync alone
+   * never populates session_messages).
    */
-  async triggerSessionSync(machineId: string): Promise<{ synced: number }> {
-    // Try gateway first, fall back to SSH
+  async triggerSessionSync(machineId: string): Promise<{ synced: number; transcripts: number }> {
     let synced = await this.sessionMonitor.syncSessionsViaGateway(machineId);
     if (synced === 0) {
       const machine = await this.machineService.getMachine(machineId);
       const connInfo = this.machineService.toConnectionInfo(machine);
       synced = await this.sessionMonitor.syncSessionsViaSSH(machineId, connInfo, machine.openclawHome);
     }
-    return { synced };
+    const { pulled } = await this.syncTranscriptsForActiveSessions(machineId);
+    return { synced, transcripts: pulled };
   }
 
   /**
@@ -141,11 +145,17 @@ export class MonitoringService {
   }
 
   /**
-   * Sync sessions for all connected machines.
+   * Sync sessions for all connected machines. Each tick:
+   *   1. Refresh session_snapshots (metadata: tokens, last activity, etc.)
+   *   2. Pull transcripts into session_messages for sessions active in
+   *      the configured summary window. Without step 2, session_messages
+   *      stays empty unless a user manually opens a session in the UI,
+   *      and the scheduled summary job has nothing to summarize.
    */
-  async syncAllMachineSessions(): Promise<number> {
+  async syncAllMachineSessions(): Promise<{ snapshots: number; transcripts: number }> {
     const machines = await this.machineService.listMachines({ status: 'online' });
-    let total = 0;
+    let snapshots = 0;
+    let transcripts = 0;
     for (const machine of machines) {
       try {
         let synced = await this.sessionMonitor.syncSessionsViaGateway(machine.id);
@@ -153,12 +163,81 @@ export class MonitoringService {
           const connInfo = this.machineService.toConnectionInfo(machine);
           synced = await this.sessionMonitor.syncSessionsViaSSH(machine.id, connInfo, machine.openclawHome);
         }
-        total += synced;
+        snapshots += synced;
+
+        const { pulled } = await this.syncTranscriptsForActiveSessions(machine.id);
+        transcripts += pulled;
       } catch (err) {
         log.warn({ machineId: machine.id, err: (err as Error).message }, 'Failed to sync sessions');
       }
     }
-    return total;
+    return { snapshots, transcripts };
+  }
+
+  /**
+   * Pull transcript messages into session_messages for every snapshot on
+   * `machineId` whose last_activity_at falls inside the lookback window.
+   *
+   * Lookback defaults to summary windowHours + 1h margin, so sessions that
+   * just rolled out of the summary window are still captured on the next
+   * tick. Gateway is preferred; SSH is the fallback.
+   *
+   * Cost note: gateway returns the full message list per call but
+   * `pullTranscriptViaGateway` uses `getMaxMessageIndex` to dedupe, so the
+   * DB write side is cheap. The dominant cost is the per-session RPC; for
+   * a 60s sync interval that's ~N RPCs/min where N = active sessions.
+   */
+  private async syncTranscriptsForActiveSessions(
+    machineId: string,
+    lookbackHours: number = config.summaries.windowHours + 1,
+  ): Promise<{ sessions: number; pulled: number }> {
+    const snapshots = await this.repo.findSessionSnapshots({
+      machineId,
+      activeMinutes: lookbackHours * 60,
+      limit: 500,
+    });
+
+    if (snapshots.length === 0) return { sessions: 0, pulled: 0 };
+
+    let machine: Awaited<ReturnType<MachineService['getMachine']>> | null = null;
+    let pulled = 0;
+    for (const snap of snapshots) {
+      try {
+        let n = await this.sessionMonitor.pullTranscriptViaGateway(
+          machineId,
+          snap.sessionKey,
+          snap.agentId,
+        );
+        if (n === 0) {
+          if (!machine) {
+            machine = await this.machineService.getMachine(machineId);
+          }
+          const connInfo = this.machineService.toConnectionInfo(machine);
+          const sessionId = snap.sessionId ?? snap.sessionKey;
+          n = await this.sessionMonitor.pullTranscriptViaSSH(
+            machineId,
+            connInfo,
+            machine.openclawHome,
+            snap.agentId,
+            sessionId,
+          );
+        }
+        pulled += n;
+      } catch (err) {
+        log.warn(
+          { machineId, sessionKey: snap.sessionKey, err: (err as Error).message },
+          'Transcript pull failed during session sync',
+        );
+      }
+    }
+
+    if (pulled > 0) {
+      log.debug(
+        { machineId, sessions: snapshots.length, pulled },
+        'Pulled transcripts for active sessions',
+      );
+    }
+    return { sessions: snapshots.length, pulled };
   }
 
   /**

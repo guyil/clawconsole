@@ -17,6 +17,7 @@ function makeFakeAgent(overrides: Partial<Agent> = {}): Agent {
     isDefault: false,
     workspacePath: 'workspace-test-bot',
     discoveredSkills: null,
+    modelConfig: null,
     status: 'draft',
     lastSyncedAt: null,
     createdAt: new Date(),

@@ -94,6 +94,7 @@ export function useInstallSkill() {
       skillsApi.installOnAgent(agentId, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skillKeys.all });
+      qc.invalidateQueries({ queryKey: ['agents'] });
       toast.success('Skill 已安装');
     },
   });
@@ -106,6 +107,7 @@ export function useRemoveSkillFromAgent() {
       skillsApi.removeFromAgent(agentId, skillCatalogId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: skillKeys.all });
+      qc.invalidateQueries({ queryKey: ['agents'] });
       toast.success('Skill 已卸载');
     },
   });

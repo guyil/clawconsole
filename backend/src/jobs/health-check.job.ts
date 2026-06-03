@@ -20,7 +20,7 @@ export function createHealthCheckHandler(
 
       try {
         const result = await machineService.healthCheck(machine.id);
-        if (gatewayPool) {
+        if (gatewayPool && config.gateway.connectorEnabled) {
           if (result.status === 'online' && !gatewayPool.isConnected(machine.id)) {
             gatewayPool.addMachine({
               machineId: machine.id,

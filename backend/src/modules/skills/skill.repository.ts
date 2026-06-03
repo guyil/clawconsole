@@ -119,6 +119,10 @@ export class SkillRepository {
   // --- Agent Skills ---
 
   async findAgentSkills(agentId: string): Promise<Array<AgentSkillInstall & { skill: SkillCatalogEntry }>> {
+    // IMPORTANT: must select ALL skills_catalog columns that toCatalogEntry()
+    // hydrates — otherwise downstream consumers (notably the /distill-bundle
+    // endpoint) get records with `skillMdContent: null`, `auxiliaryFiles: null`
+    // etc., and the platform's distillation drops them as "empty content".
     const rows = await this.db('agent_skills')
       .join('skills_catalog', 'agent_skills.skill_catalog_id', 'skills_catalog.id')
       .where('agent_skills.agent_id', agentId)
@@ -134,7 +138,16 @@ export class SkillRepository {
         'skills_catalog.skill_key',
         'skills_catalog.name as skill_name',
         'skills_catalog.description as skill_description',
+        'skills_catalog.scope as skill_scope',
         'skills_catalog.source as skill_source',
+        'skills_catalog.version',
+        'skills_catalog.frontmatter',
+        'skills_catalog.skill_md_content',
+        'skills_catalog.auxiliary_files',
+        'skills_catalog.requires_bins',
+        'skills_catalog.requires_env',
+        'skills_catalog.tags',
+        'skills_catalog.local_path',
         'skills_catalog.review_status as skill_review_status',
       );
 
@@ -188,7 +201,10 @@ export class SkillRepository {
       skillKey: row.skill_key as string,
       name: (row.skill_name ?? row.name) as string,
       description: (row.skill_description ?? row.description) as string | null,
-      scope: row.scope as SkillScope,
+      // Prefer the explicit `skill_scope` alias (added in findAgentSkills to
+      // disambiguate from `agent_skills.scope`). Fall back to `scope` for
+      // call sites that select directly from skills_catalog.
+      scope: (row.skill_scope ?? row.scope) as SkillScope,
       source: (row.skill_source ?? row.source) as SkillSource,
       version: row.version as string | null,
       frontmatter: safeJsonParse<Record<string, unknown>>(row.frontmatter),

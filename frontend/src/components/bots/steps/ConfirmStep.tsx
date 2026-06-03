@@ -1,5 +1,6 @@
-import { Server, Bot, FolderOpen, FileText, MessageSquare, Terminal } from 'lucide-react';
+import { Server, Bot, FolderOpen, FileText, MessageSquare, Terminal, Copy } from 'lucide-react';
 import { Badge } from '../../ui/Badge';
+import { useAllAgents } from '../../../hooks/useAgents';
 import type { Machine } from '../../../types/machine';
 import type { BotInfoData } from './BotInfoStep';
 import type { ChannelBinding } from './ChannelConfigStep';
@@ -17,14 +18,39 @@ interface ConfirmStepProps {
   machine: Machine;
   botInfo: BotInfoData;
   channels?: ChannelBinding[];
+  copyFromAgentId?: string;
 }
 
-export function ConfirmStep({ machine, botInfo, channels = [] }: ConfirmStepProps) {
+export function ConfirmStep({ machine, botInfo, channels = [], copyFromAgentId }: ConfirmStepProps) {
   const workspacePath = botInfo.isDefault ? 'workspace' : `workspace-${botInfo.agentId}`;
+  const { data: allAgents } = useAllAgents();
+  const sourceBot = copyFromAgentId
+    ? (allAgents?.data ?? []).find((a) => a.id === copyFromAgentId)
+    : null;
 
   return (
     <div className="space-y-5">
       <div className="bg-claw-bg rounded-lg border border-claw-border p-4 space-y-4">
+        {/* Clone source */}
+        {sourceBot && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-claw-accent/10 flex items-center justify-center">
+                <Copy size={16} className="text-claw-accent" />
+              </div>
+              <div>
+                <div className="text-[11px] text-claw-muted">复制配置自</div>
+                <div className="text-sm font-semibold text-claw-text">
+                  {sourceBot.name || sourceBot.agentId}
+                  <span className="text-claw-muted font-normal ml-2">@ {sourceBot.machineName}</span>
+                </div>
+              </div>
+              <Badge variant="info">Clone</Badge>
+            </div>
+            <div className="border-t border-claw-border" />
+          </>
+        )}
+
         {/* Target node */}
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-claw-primary/10 flex items-center justify-center">
@@ -126,6 +152,13 @@ export function ConfirmStep({ machine, botInfo, channels = [] }: ConfirmStepProp
             label="重启 Gateway"
             command="openclaw gateway restart"
           />
+          {sourceBot && (
+            <DeployStep
+              step={channels.length > 0 ? 3 + channels.length * 2 : 3}
+              label="复制配置文件"
+              command={`cp ${sourceBot.agentId}/config -> ${botInfo.agentId}/config (SOUL.md, IDENTITY.md, ...)`}
+            />
+          )}
         </div>
       </div>
 
@@ -147,13 +180,13 @@ export function ConfirmStep({ machine, botInfo, channels = [] }: ConfirmStepProp
           <div className="flex items-center gap-2 text-claw-success pl-4">
             <FileText size={12} />
             <span>SOUL.md</span>
-            <Badge variant="success">新建</Badge>
-            <span className="text-claw-muted">默认人设模板</span>
+            <Badge variant={sourceBot ? 'info' : 'success'}>{sourceBot ? '复制' : '新建'}</Badge>
+            <span className="text-claw-muted">{sourceBot ? `来自 ${sourceBot.agentId}` : '默认人设模板'}</span>
           </div>
           <div className="flex items-center gap-2 text-claw-success pl-4">
             <FileText size={12} />
             <span>IDENTITY.md</span>
-            <Badge variant="success">新建</Badge>
+            <Badge variant={sourceBot ? 'info' : 'success'}>{sourceBot ? '复制' : '新建'}</Badge>
           </div>
         </div>
       </div>

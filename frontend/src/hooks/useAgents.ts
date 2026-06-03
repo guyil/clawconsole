@@ -65,14 +65,78 @@ export function useCreateAgent() {
   });
 }
 
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, cleanRemote = true }: { agentId: string; cleanRemote?: boolean }) =>
+      agentsApi.delete(agentId, cleanRemote),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.all });
+      toast.success('Bot 已删除');
+    },
+    onError: (err: Error) => {
+      toast.error(`删除失败: ${err.message}`);
+    },
+  });
+}
+
 export function useUpdateAgent() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ agentId, data }: { agentId: string; data: UpdateAgentInput }) =>
       agentsApi.update(agentId, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: agentKeys.all });
-      toast.success('Agent 已更新');
+    onSuccess: (updated, vars) => {
+      // Seed the detail cache with the fresh row first so the open
+      // BotDetailPage flips to the new value on the same tick, then
+      // invalidate the broader list/byMachine queries (which the
+      // BotsPage etc. read off of) so they re-fetch in the background.
+      qc.setQueryData(agentKeys.detail(vars.agentId), (prev: unknown) =>
+        prev && typeof prev === 'object' ? { ...prev, ...updated } : updated,
+      );
+      qc.invalidateQueries({ queryKey: agentKeys.list() });
+      qc.invalidateQueries({ queryKey: agentKeys.detail(vars.agentId) });
+      toast.success('已保存');
+    },
+    onError: (err: Error) => {
+      toast.error(`保存失败: ${err.message}`);
+    },
+  });
+}
+
+/**
+ * Toggle the per-bot opt-in for the nightly ``daily-oss-backup`` cron.
+ *
+ * Why a dedicated hook (vs. reusing ``useUpdateAgent``)
+ * ----------------------------------------------------
+ *   - Toast copy is bot-specific ("已加入每日同步" / "已退出每日同步"
+ *     reads cleaner than the generic "已保存"). The toggle UI fires very
+ *     frequently while users curate which bots auto-sync, and a vague
+ *     toast is easy to mis-attribute to a different setting they just
+ *     touched.
+ *   - Decouples cache invalidation: the BotDetailPage and the
+ *     DistillStatusModal both render the flag, but only the modal owns
+ *     the ``distill-status`` query key. Touching that key from inside
+ *     ``useUpdateAgent`` (which all rename / status edits go through)
+ *     would over-fetch the status endpoint on every rename.
+ */
+export function useToggleAgentOssSync() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, enabled }: { agentId: string; enabled: boolean }) =>
+      agentsApi.update(agentId, { ossSyncEnabled: enabled }),
+    onSuccess: (updated, vars) => {
+      qc.setQueryData(agentKeys.detail(vars.agentId), (prev: unknown) =>
+        prev && typeof prev === 'object' ? { ...prev, ...updated } : updated,
+      );
+      qc.invalidateQueries({ queryKey: agentKeys.list() });
+      qc.invalidateQueries({ queryKey: agentKeys.detail(vars.agentId) });
+      // Distill status modal reads ``ossSyncEnabled`` per agent. Bump
+      // the snapshot so the badge flips on the same tick as the toggle.
+      qc.invalidateQueries({ queryKey: ['distill-status'] });
+      toast.success(vars.enabled ? '已加入每日蒸馏到 OSS' : '已退出每日蒸馏到 OSS');
+    },
+    onError: (err: Error) => {
+      toast.error(`保存失败: ${err.message}`);
     },
   });
 }
@@ -80,8 +144,8 @@ export function useUpdateAgent() {
 export function useProvisionAgent() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ agentId, channels }: { agentId: string; channels?: ProvisionInput['channels'] }) =>
-      agentsApi.provision(agentId, { channels }),
+    mutationFn: ({ agentId, channels, copyFromAgentId }: { agentId: string; channels?: ProvisionInput['channels']; copyFromAgentId?: string }) =>
+      agentsApi.provision(agentId, { channels, copyFromAgentId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentKeys.all });
       toast.success('Bot 部署成功');

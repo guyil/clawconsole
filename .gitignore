@@ -9,6 +9,9 @@ dist-ssr/
 .env
 .env.local
 .env.*.local
+.env.production
+.env.bak
+*.env.bak
 *.pem
 *.key
 *.p12
@@ -38,3 +41,8 @@ Thumbs.db
 
 # Local config
 *.local
+
+# Per-machine on-disk backups produced by /api/machines/:id/backup.
+# Default location is <repo>/backups/<machine>/<timestamp>/. Override
+# with BACKUP_ROOT to write elsewhere; that path is up to you to ignore.
+backups/

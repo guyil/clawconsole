@@ -27,6 +27,12 @@ function intEnv(key: string, defaultValue: number): number {
   return parsed;
 }
 
+function boolEnv(key: string, defaultValue: boolean): boolean {
+  const raw = process.env[key];
+  if (raw === undefined) return defaultValue;
+  return raw === 'true' || raw === '1';
+}
+
 export const config = {
   server: {
     port: intEnv('PORT', 3000),
@@ -54,6 +60,17 @@ export const config = {
     credentialKey: requireEnv('CREDENTIAL_ENCRYPTION_KEY'),
   },
 
+  // Single-shared-password auth gate. When ``password`` and ``secret`` are
+  // both set, every /api/* request must carry a valid bearer token issued
+  // by POST /api/auth/login (whitelist in auth.middleware.ts). Leaving
+  // either unset disables the gate (with a warning log on boot) so a
+  // half-configured staging box can still serve traffic.
+  auth: {
+    password: optionalEnv('APP_PASSWORD', ''),
+    secret: optionalEnv('APP_AUTH_SECRET', ''),
+    tokenTtlS: intEnv('APP_AUTH_TOKEN_TTL_S', 60 * 60 * 24 * 7), // 7 days
+  },
+
   ssh: {
     defaultUser: optionalEnv('SSH_DEFAULT_USER', 'claw'),
     defaultPort: intEnv('SSH_DEFAULT_PORT', 22),
@@ -77,10 +94,25 @@ export const config = {
     syncRetryIntervalS: intEnv('SYNC_RETRY_INTERVAL_S', 120),
     sessionSyncIntervalS: intEnv('SESSION_SYNC_INTERVAL_S', 60),
     logCollectorIntervalS: intEnv('LOG_COLLECTOR_INTERVAL_S', 300),
+    // Per-job enable flags. Set any of these to "false" in .env to disable
+    // the corresponding recurring background job. The matching BullMQ worker
+    // is also skipped so the queue is never drained automatically.
+    healthCheckEnabled: boolEnv('HEALTH_CHECK_ENABLED', true),
+    autoPullEnabled: boolEnv('AUTO_PULL_ENABLED', true),
+    syncRetryEnabled: boolEnv('SYNC_RETRY_ENABLED', true),
+    sessionSyncEnabled: boolEnv('SESSION_SYNC_ENABLED', true),
+    logCollectorEnabled: boolEnv('LOG_COLLECTOR_ENABLED', true),
+    evoClawEnabled: boolEnv('EVO_CLAW_ENABLED', true),
+    summaryEnabled: boolEnv('SUMMARY_ENABLED', true),
+    dailyOssBackupEnabled: boolEnv('DAILY_OSS_BACKUP_ENABLED', true),
   },
 
   gateway: {
     defaultPort: intEnv('GATEWAY_DEFAULT_PORT', 18789),
+    // When false, the WebSocket gateway connector pool will not auto-connect
+    // to remote machines. Useful when the remote gateway service is not
+    // running and you don't want reconnect-loop log spam.
+    connectorEnabled: boolEnv('GATEWAY_CONNECTOR_ENABLED', true),
   },
 
   playground: {
@@ -92,6 +124,55 @@ export const config = {
     browserHeadless: optionalEnv('PLAYGROUND_BROWSER_HEADLESS', 'true') === 'true',
     browserbaseApiKey: optionalEnv('BROWSERBASE_API_KEY', ''),
     browserbaseProjectId: optionalEnv('BROWSERBASE_PROJECT_ID', ''),
+  },
+  evoClaw: {
+    intervalS: intEnv('EVO_CLAW_INTERVAL_S', 86400),
+    minSessions: intEnv('EVO_CLAW_MIN_SESSIONS', 5),
+    maxRulesPerFile: intEnv('EVO_CLAW_MAX_RULES_PER_FILE', 15),
+    decayThresholdRuns: intEnv('EVO_CLAW_DECAY_THRESHOLD_RUNS', 10),
+    judgeModel: optionalEnv('EVO_CLAW_JUDGE_MODEL', 'claude-sonnet-4-20250514'),
+  },
+
+  backup: {
+    // Per-machine backups land at <root>/<machineName>/<timestamp>/.
+    // Default: <repo-root>/backups, derived from this file's location
+    // (src/config/index.ts is 4 levels deep from the repo root).
+    // Override via BACKUP_ROOT to write elsewhere (absolute path).
+    root: process.env.BACKUP_ROOT
+      ? path.resolve(process.env.BACKUP_ROOT)
+      : path.resolve(__dirname, '../../..', 'backups'),
+  },
+
+  // Session summaries: LLM-generated periodic business recaps of each bot's
+  // conversation activity. The recurring job runs on a cron schedule (default
+  // 00:00 and 12:00 Asia/Shanghai) and summarizes the previous `windowHours`
+  // of activity for every bot that had messages. Bots whose operator opts in
+  // (agents.summary_push_enabled=true) additionally get pushed to a Feishu
+  // group via im/v1/messages using FEISHU_APP_ID/APP_SECRET + chat_id below.
+  summaries: {
+    geminiApiKey: optionalEnv('GEMINI_API_KEY', ''),
+    model: optionalEnv('SUMMARY_MODEL', 'gemini-3-flash-preview'),
+    cronPattern: optionalEnv('SUMMARY_CRON', '0 0,12 * * *'),
+    timezone: optionalEnv('SUMMARY_TIMEZONE', 'Asia/Shanghai'),
+    windowHours: intEnv('SUMMARY_WINDOW_HOURS', 12),
+    feishu: {
+      appId: optionalEnv('FEISHU_APP_ID', ''),
+      appSecret: optionalEnv('FEISHU_APP_SECRET', ''),
+      summaryChatId: optionalEnv('FEISHU_SUMMARY_CHAT_ID', ''),
+    },
+  },
+
+  // Daily backup of all online-machine agents to OSS via DistillPushService.
+  // Iterates online machines, pushes each non-draft agent (persona/skills/
+  // vector/raw memory) to OSS with content-hash diffing for persona so
+  // unchanged files are skipped. Runs once a day on cronPattern in the
+  // configured timezone, with `concurrency` agents in-flight per machine.
+  // Disable via DAILY_OSS_BACKUP_ENABLED=false (e.g. on staging clones).
+  dailyOssBackup: {
+    cronPattern: optionalEnv('DAILY_OSS_BACKUP_CRON', '0 3 * * *'),
+    timezone: optionalEnv('DAILY_OSS_BACKUP_TIMEZONE', 'Asia/Shanghai'),
+    concurrency: intEnv('DAILY_OSS_BACKUP_CONCURRENCY', 2),
+    perAgentTimeoutMs: intEnv('DAILY_OSS_BACKUP_PER_AGENT_TIMEOUT_MS', 600_000),
   },
 } as const;
 

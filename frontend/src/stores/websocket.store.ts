@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import toast from 'react-hot-toast';
+import { clearToken, getToken } from '../api/auth.api';
 
 export interface WSEvent {
   type: string;
@@ -76,14 +77,33 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
     const existing = get().socket;
     if (existing && existing.readyState <= WebSocket.OPEN) return;
 
+    // Bail if there's no token — there's no point opening a socket that
+    // the server is going to slam shut with code 4401, and the resulting
+    // 3s reconnect loop would just spam the log. App boot only mounts
+    // the AuthedApp (which calls connect) after a successful auth, so a
+    // missing token here usually means the token just got cleared by a
+    // 401 response interceptor; the page reload is imminent.
+    const token = getToken();
+    if (!token) return;
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const url = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(url);
 
     ws.onopen = () => set({ connected: true, socket: ws });
 
     ws.onmessage = (e) => {
       try {
         const event: WSEvent = JSON.parse(e.data);
+        // Server sends this just before closing the socket with 4401
+        // when the token is invalid / expired. Treat it identically to
+        // an HTTP 401: drop the cached token and bounce the page to
+        // the login screen.
+        if (event.type === 'auth_error') {
+          clearToken();
+          window.location.reload();
+          return;
+        }
         get().addEvent(event);
         handleSyncEvent(event, get);
       } catch {
@@ -91,8 +111,15 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       set({ connected: false, socket: null });
+      // 4401 = our custom "unauthorized" close code from ws-server.ts.
+      // Don't reconnect — the user needs to log in again.
+      if (e.code === 4401) {
+        clearToken();
+        window.location.reload();
+        return;
+      }
       setTimeout(() => get().connect(), 3000);
     };
 

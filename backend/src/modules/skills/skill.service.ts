@@ -248,7 +248,7 @@ export class SkillService {
   }
 
   async updateSkill(id: string, input: UpdateSkillInput): Promise<SkillCatalogEntry> {
-    const skill = await this.getSkill(id);
+    await this.getSkill(id);
     const updated = await this.repo.update(id, input);
     if (!updated) throw new NotFoundError('Skill', id);
     return updated;
@@ -510,10 +510,6 @@ export class SkillService {
   ): Promise<SkillCatalogEntry> {
     const machine = await this.machineService.getMachine(machineId);
     const connInfo = this.machineService.toConnectionInfo(machine);
-
-    const skillDir = scope === 'global'
-      ? `${machine.openclawHome}/skills/${skillKey}`
-      : `${machine.openclawHome}/workspace-*/skills/${skillKey}`;
 
     const remotePath = scope === 'global'
       ? `${machine.openclawHome}/skills/${skillKey}/SKILL.md`

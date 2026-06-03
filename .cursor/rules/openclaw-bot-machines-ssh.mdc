@@ -1,0 +1,109 @@
+---
+description: SSH access details for the openclaw bot host machines (Charlie & Victor Mac mini) — how to connect and inspect bot/gateway state
+alwaysApply: true
+---
+
+# OpenClaw Bot Machines — SSH Access
+
+ClawConsole 管理着两台 openclaw 节点机：**Charlie Mac Mini** 和 **Victor Mac Mini**。两台机器都通过 Tailscale 暴露主机名，使用密码登录（没有配 ssh-key）。
+
+> **不要**把这里的密码同步进 git 之外的任何地方；这条 rule 只是给 agent 在本仓库内的故障排查使用。
+
+## 连接信息（来自 `clawconsole.machines` 表）
+
+| 名字 | tailscale_hostname | ssh_user | ssh_port | openclaw_home | 密码 |
+|---|---|---|---|---|---|
+| Charlie Mac Mini | `clawbots-mac-mini` | `clawbot` | 22 | `~/.openclaw` | `sdfz0403` |
+| Victor Mac Mini | `yilins-mac-mini` | `yilingu` | 22 | `~/.openclaw` | *询问 user 获取* |
+
+需要从数据库重新查时：
+
+```bash
+mysql -uroot -pGuyilin123 -D clawconsole -e \
+  "SELECT name, tailscale_hostname, ssh_user, ssh_port, openclaw_home, status FROM machines;"
+```
+
+## 前置工具
+
+- macOS 上 tailscale CLI 不在 `$PATH`，要走 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`
+- 用 `sshpass` 走密码登录（`/opt/homebrew/bin/sshpass` 已装好）
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale status | grep -iE 'clawbot|yilins'
+```
+
+## 标准登录方式（Charlie）
+
+```bash
+SSHPASS='sdfz0403' sshpass -e ssh -o StrictHostKeyChecking=no \
+  clawbot@clawbots-mac-mini '<远端命令>'
+```
+
+> Mac mini 时区是 **CDT (UTC-5)**，写入文件 mtime 看到 `03:04` 实际是北京时间 `16:04`。判断"是否新鲜"前先 `date -u` 对一下。
+
+## 排查 bot / gateway 是否卡死的 5 步法
+
+每一步独立、可以单条 SSH 命令拿到证据，避免一次拉太大输出。
+
+### 1. gateway 进程与日志新鲜度
+
+```bash
+ps -axo pid,etime,pcpu,rss,command | grep openclaw-gateway | grep -v grep
+ls -lt ~/.openclaw/logs/ | head -5
+launchctl list | grep -iE 'openclaw|claw'
+```
+
+`ai.openclaw.gateway` 由 launchd 托管，PID 不是 1 的子进程就是它。`gateway.log` 的 mtime < 1 分钟即为活跃。
+
+### 2. 当前是否有 LLM/agent 子进程
+
+```bash
+ps -axo pid,etime,pcpu,rss,command \
+  | grep -iE '(claude|codex|@anthropic|openclaw-agent)' \
+  | grep -vE 'grep|Claude Helper|Claude\.app|chrome_crashpad'
+```
+
+**没有任何匹配 = 所有 bot 处在"等消息"空闲态**（注意：这是健康状态，不是卡死）。
+
+### 3. 各 agent 最近会话写入
+
+```bash
+for a in ~/.openclaw/agents/*/sessions; do
+  ls -lt "$a" 2>/dev/null | head -2 | awk -v a="$a" 'NR==2 {print a": "$0}'
+done
+```
+
+### 4. gateway 最近活动 / 循环告警
+
+```bash
+tail -n 50 ~/.openclaw/logs/gateway.log
+tail -n 30 ~/.openclaw/logs/gateway.err.log | grep -iE 'loop|stuck|stale|timeout|fail'
+```
+
+关注 `[agents/loop-detection] Loop warning: ... called N times with identical arguments`——N 持续上升说明那个 agent 真的在原地打转。
+
+### 5. 在飞工具调用（用 Python 配对 call/done）
+
+不要直接对 200MB 的 gateway.log 跑 awk，会卡。用 tail + python：
+
+```bash
+tail -n 5000 ~/.openclaw/logs/gateway.log | python3 -c "
+import sys, re
+calls = {}
+for line in sys.stdin:
+    m = re.search(r'^([0-9T:.Z-]+).*msg:(om_[a-z0-9]+)\]: tool (call|done|fail):', line)
+    if not m: continue
+    ts, mid, kind = m.group(1), m.group(2), m.group(3)
+    if kind == 'call': calls.setdefault(mid, []).append((ts, line.strip()))
+    elif calls.get(mid): calls[mid].pop(0)
+for mid, items in calls.items():
+    for ts, line in items: print(ts, mid, line[:200])
+" | tail -20
+```
+
+## 已知坑
+
+- `gateway.log` 长期 DEBUG 级别打 `onPartialReply`，**轻松涨到 200MB+**；做 grep/awk 之前先 `tail -n N` 截断再处理
+- `hermes-agent` / `hermes-webui` 进程可以连续跑数天但日志静止——这是另一个 idle service，**不是 openclaw bot**，不要混淆
+- WebSocket `health-monitor: restarting (reason: stale-socket)` 是 60s 心跳的**正常自愈**，不是错误
+- 来自 clawconsole 自身备份模块的 `tar --exclude=...` 进程从 SSH 下挂，可能跑十几分钟，是 console 拉走 `~/.openclaw` 的快照，跟 bot 任务无关

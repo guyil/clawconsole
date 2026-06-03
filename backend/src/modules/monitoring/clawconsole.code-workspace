@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../../.."
+		},
+		{
+			"path": "../../../../../../../openclaw/source/openclaw"
+		},
+		{
+			"path": "../../../../../../低代码平台/hermes-agent"
+		}
+	],
+	"settings": {}
+}

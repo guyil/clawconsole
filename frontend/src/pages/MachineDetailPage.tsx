@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useMachine, useHealthCheck, useDiscover } from '../hooks/useMachines';
 import { useAgentsByMachine } from '../hooks/useAgents';
@@ -11,18 +11,34 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { PageSpinner } from '../components/ui/Spinner';
 import { Card } from '../components/ui/Card';
-import { ChevronLeft, HeartPulse, Search, Sparkles, Settings } from 'lucide-react';
+import { GlobalModelConfigPanel } from '../components/machines/GlobalModelConfigPanel';
+import { ChevronLeft, HeartPulse, Search, Sparkles, Settings, Cpu } from 'lucide-react';
 
-type Tab = 'agents' | 'skills' | 'files' | 'sync';
+type Tab = 'agents' | 'skills' | 'model' | 'files' | 'sync';
 
 export function MachineDetailPage() {
   const { machineId } = useParams<{ machineId: string }>();
   const { data: machine, isLoading } = useMachine(machineId!);
   const { data: agentsData } = useAgentsByMachine(machineId!);
   const healthCheck = useHealthCheck();
+  const autoHealthCheck = useHealthCheck({ silent: true });
   const discover = useDiscover();
   const [activeTab, setActiveTab] = useState<Tab>('agents');
   const [showEdit, setShowEdit] = useState(false);
+
+  // Background health-check job is disabled by default; run a fresh check
+  // (silently) on mount so the page reflects the current machine state.
+  // Each machineId is only auto-checked once per session to avoid
+  // double-firing on re-renders.
+  const autoCheckedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!machineId) return;
+    if (autoCheckedRef.current === machineId) return;
+    autoCheckedRef.current = machineId;
+    autoHealthCheck.mutate(machineId);
+    // mutate identity is stable; intentionally omitted from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [machineId]);
 
   if (isLoading || !machine) return <PageSpinner />;
 
@@ -33,6 +49,7 @@ export function MachineDetailPage() {
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: 'agents', label: 'Agents', count: agents.length },
     { id: 'skills', label: 'Skills', count: discoveredSkills.length },
+    { id: 'model', label: 'Model 配置' },
     { id: 'files', label: '文件管理' },
     { id: 'sync', label: '同步管理' },
   ];
@@ -197,6 +214,8 @@ export function MachineDetailPage() {
           )}
         </div>
       )}
+
+      {activeTab === 'model' && <GlobalModelConfigPanel machineId={machineId!} />}
 
       {activeTab === 'files' && <AgentFileEditor machineId={machineId!} />}
 

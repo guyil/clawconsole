@@ -8,8 +8,8 @@ export function createSessionSyncHandler(monitoringService: MonitoringService) {
   return async (_job: Job): Promise<void> => {
     log.info('Running session sync for all machines');
     try {
-      const synced = await monitoringService.syncAllMachineSessions();
-      log.info({ synced }, 'Session sync complete');
+      const result = await monitoringService.syncAllMachineSessions();
+      log.info(result, 'Session sync complete');
     } catch (err) {
       log.error({ err }, 'Session sync failed');
     }

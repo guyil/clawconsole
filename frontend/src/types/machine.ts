@@ -1,3 +1,5 @@
+import type { AgentModelConfig } from './agent';
+
 export type MachineStatus = 'online' | 'offline' | 'unknown';
 
 export interface Machine {
@@ -16,6 +18,7 @@ export interface Machine {
   lastHealthCheckAt: string | null;
   tags: string[] | null;
   discoveredSkills: string[] | null;
+  modelConfig: AgentModelConfig | null;
   createdAt: string;
   updatedAt: string;
 }

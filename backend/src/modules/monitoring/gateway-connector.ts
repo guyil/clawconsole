@@ -123,7 +123,7 @@ class GatewayConnection {
     }
   }
 
-  private sendConnectRequest(challenge: Record<string, unknown>): void {
+  private sendConnectRequest(_challenge: Record<string, unknown>): void {
     const params: Record<string, unknown> = {
       client: { id: 'clawconsole', version: '1.0' },
       scopes: ['operator.admin'],

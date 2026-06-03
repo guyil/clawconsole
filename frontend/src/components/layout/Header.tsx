@@ -1,6 +1,8 @@
 import { useLocation } from 'react-router-dom';
+import { LogOut } from 'lucide-react';
 import { useWebSocketStore } from '../../stores/websocket.store';
 import { StatusDot } from '../ui/StatusDot';
+import { logout } from '../../api/auth.api';
 
 const PAGE_TITLES: Record<string, string> = {
   '/': '仪表盘',
@@ -32,6 +34,18 @@ export function Header() {
         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-claw-primary to-claw-accent flex items-center justify-center text-white text-xs font-semibold">
           A
         </div>
+        <button
+          type="button"
+          onClick={async () => {
+            await logout();
+            window.location.reload();
+          }}
+          title="退出登录"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-claw-muted hover:text-claw-text hover:bg-claw-card transition-colors cursor-pointer"
+        >
+          <LogOut size={14} />
+          退出
+        </button>
       </div>
     </header>
   );

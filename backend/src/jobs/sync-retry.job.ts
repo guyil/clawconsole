@@ -21,6 +21,13 @@ export function createSyncRetryHandler(
     for (const operation of retryable) {
       try {
         const machine = await machineService.getMachine(operation.machineId);
+        if (machine.status !== 'online') {
+          log.debug(
+            { operationId: operation.id, machineId: machine.id, status: machine.status },
+            'Skipping sync retry: machine not online',
+          );
+          continue;
+        }
         const connInfo = machineService.toConnectionInfo(machine);
         await syncRepository.incrementRetryCount(operation.id);
 

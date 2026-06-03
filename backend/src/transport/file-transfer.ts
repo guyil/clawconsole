@@ -91,6 +91,68 @@ export class FileTransfer {
     }
   }
 
+  /**
+   * Bulk-download many small text files in a single SSH `exec` round-trip.
+   *
+   * SFTP requires open/read/close per file (multiple RTTs each); over a
+   * Tailscale link that costs ~2s per small file even with parallel SFTP
+   * channels. This shell-based approach completes in a few seconds total
+   * because the remote shell `cat`s every file (base64-encoded for safe
+   * delimiting) into one continuous stdout stream and the client simply
+   * splits by a unique sentinel.
+   *
+   * `paths` must be already-resolved absolute paths (no `~`). On any
+   * per-file error the corresponding entry in the result array is `null`.
+   */
+  async downloadFilesBulk(
+    info: SSHConnectionInfo,
+    paths: string[],
+  ): Promise<(string | null)[]> {
+    if (paths.length === 0) return [];
+    for (const p of paths) {
+      if (!p.startsWith('/')) {
+        throw new SSHError(info.machineId, 'bulk-download', `Path must be absolute: ${p}`);
+      }
+      if (p.includes('\n') || p.includes("'")) {
+        throw new SSHError(info.machineId, 'bulk-download', `Unsafe path: ${p}`);
+      }
+    }
+
+    // Sentinel chosen so it can never appear inside base64 output.
+    const sep = `===CLAWFILE===`;
+    // Per file: emit `===CLAWFILE===<status>\n<base64>\n`. status is OK or MISSING.
+    const list = paths.map((p) => `'${p}'`).join(' ');
+    const cmd =
+      `for f in ${list}; do ` +
+      `if [ -f "$f" ]; then printf '%s\\n' '${sep}OK'; base64 < "$f"; ` +
+      `else printf '%s\\n' '${sep}MISSING'; fi; ` +
+      `done`;
+
+    const { stdout } = await this.pool.executeCommand(info, cmd, {
+      timeoutMs: 60_000,
+    });
+
+    const segments = stdout.split(sep).slice(1); // first element is empty
+    const results: (string | null)[] = new Array(paths.length).fill(null);
+    for (let i = 0; i < Math.min(paths.length, segments.length); i++) {
+      const seg = segments[i];
+      const nlIdx = seg.indexOf('\n');
+      if (nlIdx === -1) continue;
+      const status = seg.slice(0, nlIdx).trim();
+      if (status !== 'OK') continue;
+      const b64 = seg.slice(nlIdx + 1).replace(/\s+/g, '');
+      try {
+        results[i] = Buffer.from(b64, 'base64').toString('utf8');
+      } catch (err) {
+        log.warn(
+          { machineId: info.machineId, path: paths[i], err: (err as Error).message },
+          'bulk download: base64 decode failed',
+        );
+      }
+    }
+    return results;
+  }
+
   async fileExists(info: SSHConnectionInfo, remotePath: string): Promise<boolean> {
     const resolved = await this.resolvePath(info, remotePath);
     const client = await this.pool.getConnection(info);

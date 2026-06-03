@@ -13,7 +13,8 @@
     "lint": "eslint src/ tests/",
     "migrate": "knex migrate:latest --knexfile knexfile.ts",
     "migrate:rollback": "knex migrate:rollback --knexfile knexfile.ts",
-    "migrate:make": "knex migrate:make --knexfile knexfile.ts"
+    "migrate:make": "knex migrate:make --knexfile knexfile.ts",
+    "names:sync": "tsx src/scripts/sync-bot-names-from-soul.ts"
   },
   "dependencies": {
     "@browserbasehq/stagehand": "^1.14.0",
@@ -24,6 +25,7 @@
     "@langchain/core": "^1.1.31",
     "@langchain/langgraph": "^1.2.0",
     "@types/ws": "^8.18.1",
+    "ali-oss": "^6.21.0",
     "bullmq": "^5.34.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
@@ -42,6 +44,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.13.4",
     "@types/ssh2": "^1.15.4",

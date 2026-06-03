@@ -16,11 +16,20 @@ export function createAutoPullHandler(
 
     for (const machine of machines) {
       try {
-        const connInfo = machineService.toConnectionInfo(machine);
+        // Re-read status before each SSH-heavy pull. Health-check may flip
+        // a machine to offline mid-loop, and we don't want to keep hammering
+        // an unreachable host with 60s SSH timeouts.
+        const fresh = await machineService.getMachine(machine.id);
+        if (fresh.status !== 'online') {
+          log.debug({ machineId: machine.id, status: fresh.status }, 'Skipping auto-pull: not online');
+          continue;
+        }
+
+        const connInfo = machineService.toConnectionInfo(fresh);
         const result = await syncEngine.executePull(
           machine.id,
           connInfo,
-          machine.openclawHome,
+          fresh.openclawHome,
           'auto-pull',
         );
         log.info(

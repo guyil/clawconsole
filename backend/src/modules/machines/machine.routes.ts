@@ -69,7 +69,7 @@ export function registerMachineRoutes(
   fastify.post('/api/machines/:machineId/health-check', async (request) => {
     const { machineId } = request.params as { machineId: string };
     const result = await machineService.healthCheck(machineId);
-    if (gatewayPool) {
+    if (gatewayPool && config.gateway.connectorEnabled) {
       if (result.status === 'online') {
         const machine = await machineService.getMachine(machineId);
         gatewayPool.addMachine({

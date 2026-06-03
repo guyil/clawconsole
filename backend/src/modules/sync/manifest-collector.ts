@@ -7,18 +7,37 @@ import { config } from '../../config/index.js';
 
 const log = createChildLogger('manifest-collector');
 
+// Hard cap on per-file size that we will sha256 + ship over the wire.
+// Anything larger is presumed to be a runtime artifact (session jsonl
+// archives, large PDFs ingested into ``workspace/``, sessions.json.bak,
+// gateway.log, etc.) that the console does not need to mirror. Without
+// this cap a single 100MB+ file produces a ~200MB V8 string in
+// ``downloadFile`` and OOMs the backend.
+const MANIFEST_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
 const MANIFEST_SCRIPT = `
 cd "\${OPENCLAW_HOME:-\$HOME/.openclaw}" 2>/dev/null || exit 1
 find . -type f \\
+  -size -${MANIFEST_MAX_FILE_BYTES}c \\
   ! -path './.git/*' \\
   ! -path '*/node_modules/*' \\
   ! -path './browser/*' \\
   ! -path './canvas/*' \\
   ! -path './completions/*' \\
   ! -path './identity/*' \\
+  ! -path './archives/*' \\
+  ! -path './session-archives/*' \\
+  ! -path './plugin-runtime-deps/*' \\
   ! -name '*.sqlite' \\
   ! -name '*.sqlite-wal' \\
   ! -name '*.sqlite-shm' \\
+  ! -name '*.pdf' \\
+  ! -name '*.zip' \\
+  ! -name '*.tar' \\
+  ! -name '*.gz' \\
+  ! -name '*.tar.gz' \\
+  ! -name '*.tgz' \\
+  ! -name '*.log' \\
   -print0 2>/dev/null | while IFS= read -r -d '' file; do
     hash=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
     if [ -n "$hash" ]; then
@@ -47,13 +66,27 @@ export class ManifestCollector {
 
     log.info({ machineId: connectionInfo.machineId }, 'Collecting remote manifest');
 
+    // Expand a leading `~/` to `$HOME/` so the script's `cd "<path>"` works
+    // under bash. Inside double quotes bash does NOT expand tilde, so a path
+    // like `~/.openclaw` would resolve to a literal directory named `~`,
+    // `cd` would fail, and `find` would silently return zero entries.
+    // We rely on the remote shell to expand `$HOME` at runtime.
+    const homePath = openclawHome.startsWith('~/')
+      ? openclawHome.replace('~', '$HOME')
+      : openclawHome;
     const script = MANIFEST_SCRIPT.replace(
       '${OPENCLAW_HOME:-$HOME/.openclaw}',
-      openclawHome,
+      homePath,
     );
 
+    // Cap stdout at 32 MiB. Charlie currently produces ~15 MiB for ~100k
+    // files; if it ever doubles we'll loudly fail this manifest collection
+    // (and the auto-pull job for that machine that cycle) instead of
+    // silently leaking memory until the backend OOMs. See ssh-pool's
+    // ``executeCommand`` for the streaming abort.
     const result = await this.sshPool.executeCommand(connectionInfo, script, {
       timeoutMs: 60_000,
+      maxStdoutBytes: 32 * 1024 * 1024,
     });
 
     const entries = this.parseManifestOutput(result.stdout);
@@ -95,6 +128,11 @@ export class ManifestCollector {
       if (!hash || hash.length !== 64) continue;
       if (isNaN(size) || isNaN(mtime)) continue;
       if (isExcludedFromSync(relativePath)) continue;
+      // Belt-and-suspenders: even if the remote ``find -size`` predicate
+      // didn't fire (e.g. a future BSD/GNU find quirk), refuse to ship
+      // anything bigger than the cap so ``downloadFile`` cannot blow the
+      // backend heap.
+      if (size > MANIFEST_MAX_FILE_BYTES) continue;
 
       entries.push({ relativePath, hash, size, mtime });
     }

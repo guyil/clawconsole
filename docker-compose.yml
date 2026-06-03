@@ -1,0 +1,56 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env.production
+    # Bind-mount the host's tailscaled control socket so the CLI inside the
+    # container talks to the daemon that's already authenticated to the
+    # tailnet on the host. Read-only is sufficient for ``tailscale ping`` /
+    # ``tailscale status``; writes (login, logout) aren't done from app code.
+    volumes:
+      - /var/run/tailscale:/var/run/tailscale:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  redis_data:

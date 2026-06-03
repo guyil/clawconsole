@@ -22,6 +22,7 @@ const defaultBotInfo: BotInfoData = {
   name: '',
   description: '',
   isDefault: false,
+  copyFromAgentId: undefined,
 };
 
 export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
@@ -96,6 +97,7 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
           signingSecret: ch.signingSecret,
           encryptKey: ch.encryptKey,
         })),
+        copyFromAgentId: botInfo.copyFromAgentId,
       });
 
       handleClose();
@@ -160,7 +162,7 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
           />
         )}
         {step === 3 && selectedMachine && (
-          <ConfirmStep machine={selectedMachine} botInfo={botInfo} channels={channels} />
+          <ConfirmStep machine={selectedMachine} botInfo={botInfo} channels={channels} copyFromAgentId={botInfo.copyFromAgentId} />
         )}
       </div>
 

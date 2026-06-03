@@ -79,6 +79,28 @@ export class TailscaleClient {
     }
   }
 
+  /**
+   * Resolve a tailnet hostname to its 100.x.y.z IP. Returns null if the
+   * peer isn't in the tailnet or the CLI is unavailable. Used by
+   * ``MachineService.healthCheck`` to backfill the ``machines.tailscale_ip``
+   * column so the UI can show "100.100.x.x" instead of an empty cell.
+   */
+  async resolveIp(hostname: string): Promise<string | null> {
+    try {
+      const status = await this.getStatus();
+      if (status.self.hostname === hostname && status.self.tailscaleIp) {
+        return status.self.tailscaleIp;
+      }
+      const peer = status.peers.find(
+        (p) => p.hostname === hostname || `${p.hostname}.tailnet` === hostname,
+      );
+      return peer?.tailscaleIp || null;
+    } catch (err) {
+      log.warn({ hostname, err: (err as Error).message }, 'resolveIp failed');
+      return null;
+    }
+  }
+
   private execTailscale(
     args: string[],
     opts?: { allowNonZero?: boolean },
