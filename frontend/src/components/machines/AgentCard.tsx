@@ -19,9 +19,20 @@ const statusLabels: Record<string, string> = {
 };
 
 export function AgentCard({ agent, onClick, selected }: Props) {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+
+    event.preventDefault();
+    onClick();
+  };
+
   return (
     <div
       onClick={onClick}
+      onKeyDown={handleKeyDown}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
       className={`bg-claw-card rounded-xl border p-4 transition-all cursor-pointer hover:bg-claw-card-hover
         ${selected ? 'border-claw-primary' : 'border-claw-border'}`}
     >
