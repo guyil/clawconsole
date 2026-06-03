@@ -56,6 +56,17 @@ export interface DistillStatusAgent {
   lastOssDurationMs: number | null;
 }
 
+export interface DistillStatusMachine {
+  machineId: string;
+  machineAlias: string;
+  machineName: string;
+  machineStatus: string;
+  /** Total registered agents for this machine, including drafts. */
+  agentCount: number;
+  /** Non-draft agent rows returned in this status payload. */
+  distillableAgentCount: number;
+}
+
 export interface DistillStatusSummary {
   total: number;
   ok: number;
@@ -96,5 +107,7 @@ export interface DistillStatus {
   /** Currently queued / running manual distill jobs. Empty when idle. */
   inFlight: DistillStatusInFlight[];
   summary: DistillStatusSummary;
+  /** All registered machines, including machines with no distillable agents. */
+  machines: DistillStatusMachine[];
   agents: DistillStatusAgent[];
 }
