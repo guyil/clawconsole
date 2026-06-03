@@ -122,11 +122,11 @@ export function ChatThread({
             yield { content: [{ type: 'text' as const, text: fullText }] };
           }
         }
-        return { content: [{ type: 'text' as const, text: fullText }] };
+        return;
       }
 
       const text = await result;
-      return { content: [{ type: 'text' as const, text }] };
+      yield { content: [{ type: 'text' as const, text }] };
     },
   };
 

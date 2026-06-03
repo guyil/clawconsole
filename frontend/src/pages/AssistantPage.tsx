@@ -27,7 +27,7 @@ export function AssistantPage() {
 
   const handleNewSession = useCallback(async () => {
     try {
-      const session = await createSession.mutateAsync();
+      const session = await createSession.mutateAsync(undefined);
       setActiveSessionId(session.id);
     } catch {
       // handled by API interceptor
