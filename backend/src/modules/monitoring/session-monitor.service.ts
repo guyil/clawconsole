@@ -305,10 +305,14 @@ export class SessionMonitorService {
       if (primaryContent.trim()) {
         content = primaryContent;
       } else {
-        // Fallback: search for the session file across all agent directories
+        // Fallback: search for the session file across all agent directories.
+        // Channel-thread sessions (e.g. feishu group topics) store their transcript
+        // under "<sessionId>-topic-<threadId>.jsonl" rather than "<sessionId>.jsonl",
+        // so when no explicit sessionFile is known we match by sessionId prefix.
+        const searchName = sessionFile ? filename : `${sessionId}*.jsonl`;
         const { stdout: foundPath } = await this.sshPool.executeCommand(
           connInfo,
-          `find ${home}/agents -maxdepth 3 -name "${filename}" -type f 2>/dev/null | head -1`,
+          `find ${home}/agents -maxdepth 3 -name "${searchName}" -type f 2>/dev/null | head -1`,
           { timeoutMs: 15_000 },
         );
 
