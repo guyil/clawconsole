@@ -31,6 +31,8 @@
  *           recentRuns: [{ id, completedAt, finishedAt, status, durationMs }],
  *           inFlight: [{ jobId, agentDbId, agentId, machineAlias,
  *                        state: 'waiting'|'active', enqueuedAt }],
+ *           machines: [{ machineId, machineAlias, machineName,
+ *                        machineStatus, agentCount, distillableAgentCount }],
  *           agents: [{ machineAlias, agentId, lastOssSyncAt,
  *                      lastOssSyncStatus, lastOssSyncError,
  *                      lastOssVectorSha, lastOssDurationMs, … }],
@@ -381,6 +383,22 @@ export async function registerDistillPushRoutes(
         lastOssDurationMs: a.lastOssDurationMs,
       }));
 
+    const distillableAgentCountByMachine = new Map<string, number>();
+    for (const r of agentRows) {
+      distillableAgentCountByMachine.set(
+        r.machineId,
+        (distillableAgentCountByMachine.get(r.machineId) ?? 0) + 1,
+      );
+    }
+    const machineRows = machines.map((m) => ({
+      machineId: m.id,
+      machineAlias: m.alias ?? m.name,
+      machineName: m.name,
+      machineStatus: m.status,
+      agentCount: m.agentCount,
+      distillableAgentCount: distillableAgentCountByMachine.get(m.id) ?? 0,
+    }));
+
     // --- In-flight manual distill jobs -----------------------------
     type InFlight = {
       jobId: string;
@@ -468,6 +486,7 @@ export async function registerDistillPushRoutes(
         inFlight: inFlight.length,
         oldestSyncAt: oldestSyncMs !== null ? new Date(oldestSyncMs).toISOString() : null,
       },
+      machines: machineRows,
       agents: agentRows,
     };
   });

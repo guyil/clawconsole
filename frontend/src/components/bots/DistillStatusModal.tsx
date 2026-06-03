@@ -22,7 +22,7 @@ import { Spinner } from '../ui/Spinner';
 import { useDistillStatus } from '../../hooks/useDistillStatus';
 import { useToggleAgentOssSync } from '../../hooks/useAgents';
 import { CheckCircle2, AlertCircle, Clock, RefreshCw, Server, Loader2 } from 'lucide-react';
-import type { DistillStatusAgent } from '../../types/distill-status';
+import type { DistillStatusAgent, DistillStatusMachine } from '../../types/distill-status';
 
 interface Props {
   open: boolean;
@@ -120,13 +120,14 @@ export function DistillStatusModal({ open, onClose }: Props) {
   }, [data?.inFlight]);
 
   const machineOptions = useMemo(() => {
-    if (!data) return [] as { id: string; alias: string }[];
-    const seen = new Map<string, string>();
-    for (const a of data.agents) {
-      if (!seen.has(a.machineId)) seen.set(a.machineId, a.machineAlias);
-    }
-    return Array.from(seen.entries()).map(([id, alias]) => ({ id, alias }));
+    if (!data) return [] as DistillStatusMachine[];
+    return data.machines;
   }, [data]);
+
+  const selectedMachine = useMemo(() => {
+    if (!data || machineFilter === 'all') return null;
+    return data.machines.find((m) => m.machineId === machineFilter) ?? null;
+  }, [data, machineFilter]);
 
   const filteredAgents = useMemo(() => {
     if (!data) return [] as DistillStatusAgent[];
@@ -304,8 +305,8 @@ export function DistillStatusModal({ open, onClose }: Props) {
                 >
                   <option value="all">所有机器</option>
                   {machineOptions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.alias}
+                    <option key={m.machineId} value={m.machineId}>
+                      {m.machineAlias}
                     </option>
                   ))}
                 </select>
@@ -328,7 +329,20 @@ export function DistillStatusModal({ open, onClose }: Props) {
 
             {filteredAgents.length === 0 ? (
               <div className="bg-claw-card/40 border border-claw-border rounded-lg p-6 text-center text-claw-muted text-xs">
-                没有匹配的 agent
+                {selectedMachine ? (
+                  <div className="space-y-1">
+                    <div className="text-claw-text">
+                      {selectedMachine.machineAlias} 暂无可展示的非 draft agent
+                    </div>
+                    <div>
+                      机器已注册，状态 {selectedMachine.machineStatus}，共登记{' '}
+                      {selectedMachine.agentCount} 个 agent；其中{' '}
+                      {selectedMachine.distillableAgentCount} 个会出现在 OSS 蒸馏状态表。
+                    </div>
+                  </div>
+                ) : (
+                  '没有匹配的 agent'
+                )}
               </div>
             ) : (
               <div className="bg-claw-card/40 border border-claw-border rounded-lg overflow-hidden">
