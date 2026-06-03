@@ -1,0 +1,41 @@
+name: Deploy to Production
+
+# Auto-deploy to the Aliyun production server whenever code lands on main
+# (i.e. a PR is merged). Can also be triggered manually from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deploys at once; queue them so a later commit doesn't race an
+# in-flight build. We don't cancel in-progress deploys to avoid leaving the
+# remote in a half-built state.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The SSH key and .env.production are intentionally NOT in git. Restore
+      # them from encrypted repo secrets so deploy.sh (rsync + docker compose)
+      # has everything it needs. printf preserves multi-line content exactly.
+      - name: Restore deploy credentials
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          ENV_PRODUCTION: ${{ secrets.ENV_PRODUCTION }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$ENV_PRODUCTION" > "$GITHUB_WORKSPACE/.env.production"
+
+      - name: Deploy (rsync + docker compose)
+        run: |
+          chmod +x ./deploy.sh
+          SSH_KEY="$HOME/.ssh/deploy_key" ./deploy.sh
