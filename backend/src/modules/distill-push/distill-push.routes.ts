@@ -29,7 +29,8 @@
  *         {
  *           cron: { enabled, pattern, timezone, nextRunAt },
  *           recentRuns: [{ id, completedAt, finishedAt, status, durationMs }],
- *           inFlight: [{ jobId, agentDbId, agentId, machineAlias,
+ *           inFlight: [{ jobId, agentDbId, agentId, agentName,
+ *                        machineId, machineAlias, machineName,
  *                        state: 'waiting'|'active', enqueuedAt }],
  *           machines: [{ machineId, machineAlias, machineName,
  *                        machineStatus, agentCount, distillableAgentCount }],
@@ -356,6 +357,7 @@ export async function registerDistillPushRoutes(
     // --- Per-agent snapshot ----------------------------------------
     const machines = await deps.machineRepo.findAll();
     const aliasById = new Map<string, string>();
+    const machineById = new Map(machines.map((m) => [m.id, m]));
     for (const m of machines) {
       aliasById.set(m.id, m.alias ?? m.name);
     }
@@ -404,10 +406,14 @@ export async function registerDistillPushRoutes(
       jobId: string;
       agentDbId: string;
       agentId: string | null;
+      agentName: string | null;
+      machineId: string | null;
       machineAlias: string | null;
+      machineName: string | null;
       state: 'waiting' | 'active';
       enqueuedAt: string | null;
       startedAt: string | null;
+      source: string | null;
     };
     const inFlight: InFlight[] = [];
     if (deps.manualOssDistillQueue) {
@@ -425,14 +431,23 @@ export async function registerDistillPushRoutes(
           const data = job.data as ManualOssDistillJobData | undefined;
           if (!data?.agentDbId) continue;
           const a = agentById.get(data.agentDbId);
+          const machineId = a?.machineId ?? data.machineId ?? null;
+          const machine = machineId ? machineById.get(machineId) : undefined;
           inFlight.push({
             jobId: job.id,
             agentDbId: data.agentDbId,
             agentId: a?.agentId ?? null,
-            machineAlias: a ? aliasById.get(a.machineId) ?? a.machineName : null,
+            agentName: a?.name ?? null,
+            machineId,
+            machineAlias:
+              machineId !== null
+                ? aliasById.get(machineId) ?? machine?.name ?? null
+                : null,
+            machineName: machine?.name ?? a?.machineName ?? null,
             state: job.processedOn ? 'active' : 'waiting',
             enqueuedAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
             startedAt: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+            source: data.source ?? null,
           });
         }
       } catch (err) {

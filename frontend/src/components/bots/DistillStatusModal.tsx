@@ -22,7 +22,11 @@ import { Spinner } from '../ui/Spinner';
 import { useDistillStatus } from '../../hooks/useDistillStatus';
 import { useToggleAgentOssSync } from '../../hooks/useAgents';
 import { CheckCircle2, AlertCircle, Clock, RefreshCw, Server, Loader2 } from 'lucide-react';
-import type { DistillStatusAgent, DistillStatusMachine } from '../../types/distill-status';
+import type {
+  DistillStatusAgent,
+  DistillStatusInFlight,
+  DistillStatusMachine,
+} from '../../types/distill-status';
 
 interface Props {
   open: boolean;
@@ -69,7 +73,21 @@ function formatDuration(ms: number | null | undefined): string {
  * (oldest first so stragglers float up), then opted-out at the bottom
  * (no action needed on them).
  */
-function compareAgents(a: DistillStatusAgent, b: DistillStatusAgent): number {
+function compareAgents(
+  a: DistillStatusAgent,
+  b: DistillStatusAgent,
+  inFlightByAgent: Map<string, 'waiting' | 'active'>,
+): number {
+  const flightRank = (x: DistillStatusAgent): number => {
+    const state = inFlightByAgent.get(x.agentDbId);
+    if (state === 'active') return 0;
+    if (state === 'waiting') return 1;
+    return 2;
+  };
+  const fa = flightRank(a);
+  const fb = flightRank(b);
+  if (fa !== fb) return fa - fb;
+
   const rank = (x: DistillStatusAgent): number => {
     if (!x.ossSyncEnabled) return 3;
     if (x.lastOssSyncStatus === 'failed') return 0;
@@ -83,6 +101,29 @@ function compareAgents(a: DistillStatusAgent, b: DistillStatusAgent): number {
   const ta = a.lastOssSyncAt ? Date.parse(a.lastOssSyncAt) : 0;
   const tb = b.lastOssSyncAt ? Date.parse(b.lastOssSyncAt) : 0;
   return ta - tb;
+}
+
+function inFlightLabel(state: DistillStatusInFlight['state']): string {
+  return state === 'active' ? '蒸馏中' : '排队中';
+}
+
+function inFlightAgentLabel(job: DistillStatusInFlight): string {
+  return job.agentName ?? job.agentId ?? job.agentDbId;
+}
+
+function inFlightMachineLabel(job: DistillStatusInFlight): string {
+  return job.machineAlias ?? job.machineName ?? job.machineId ?? '未知机器';
+}
+
+function shortJobId(jobId: string): string {
+  return jobId.length > 12 ? jobId.slice(0, 12) : jobId;
+}
+
+function compareInFlightJobs(a: DistillStatusInFlight, b: DistillStatusInFlight): number {
+  if (a.state !== b.state) return a.state === 'active' ? -1 : 1;
+  const ta = a.startedAt ?? a.enqueuedAt;
+  const tb = b.startedAt ?? b.enqueuedAt;
+  return (ta ? Date.parse(ta) : 0) - (tb ? Date.parse(tb) : 0);
 }
 
 export function DistillStatusModal({ open, onClose }: Props) {
@@ -129,14 +170,18 @@ export function DistillStatusModal({ open, onClose }: Props) {
     return data.machines.find((m) => m.machineId === machineFilter) ?? null;
   }, [data, machineFilter]);
 
+  const inFlightJobs = useMemo(() => {
+    return [...(data?.inFlight ?? [])].sort(compareInFlightJobs);
+  }, [data?.inFlight]);
+
   const filteredAgents = useMemo(() => {
     if (!data) return [] as DistillStatusAgent[];
     const filtered =
       machineFilter === 'all'
         ? data.agents
         : data.agents.filter((a) => a.machineId === machineFilter);
-    return [...filtered].sort(compareAgents);
-  }, [data, machineFilter]);
+    return [...filtered].sort((a, b) => compareAgents(a, b, inFlightByAgent));
+  }, [data, machineFilter, inFlightByAgent]);
 
   return (
     <Modal open={open} onClose={onClose} title="蒸馏到 OSS — 任务状态" width="max-w-5xl">
@@ -237,6 +282,73 @@ export function DistillStatusModal({ open, onClose }: Props) {
               )}
             </div>
           </div>
+
+          {/* In-flight manual distill jobs */}
+          {inFlightJobs.length > 0 && (
+            <div>
+              <div className="text-xs text-claw-muted mb-2">当前蒸馏中 / 排队中</div>
+              <div className="bg-claw-card/40 border border-claw-border rounded-lg overflow-hidden">
+                <div className="divide-y divide-claw-border/60">
+                  {inFlightJobs.map((job) => {
+                    const active = job.state === 'active';
+                    const secondaryAgentId =
+                      job.agentName && job.agentId ? job.agentId : job.agentDbId;
+                    return (
+                      <div
+                        key={job.jobId}
+                        className="grid grid-cols-1 md:grid-cols-[1.1fr_1.4fr_0.8fr_1.1fr_0.7fr] gap-2 px-3 py-2.5 text-xs items-center"
+                      >
+                        <div className="inline-flex items-center gap-1.5 text-claw-text min-w-0">
+                          <Server size={12} className="text-claw-muted shrink-0" />
+                          <span className="truncate" title={inFlightMachineLabel(job)}>
+                            {inFlightMachineLabel(job)}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-claw-text truncate" title={inFlightAgentLabel(job)}>
+                            {inFlightAgentLabel(job)}
+                          </div>
+                          <div
+                            className="text-[10px] text-claw-muted font-mono truncate"
+                            title={secondaryAgentId}
+                          >
+                            {secondaryAgentId}
+                          </div>
+                        </div>
+                        <div>
+                          {active ? (
+                            <span className="inline-flex items-center gap-1 text-claw-primary-light">
+                              <Loader2 size={11} className="animate-spin" />
+                              <Badge variant="info">{inFlightLabel(job.state)}</Badge>
+                            </span>
+                          ) : (
+                            <Badge variant="info">{inFlightLabel(job.state)}</Badge>
+                          )}
+                        </div>
+                        <div className="text-claw-muted leading-tight">
+                          {job.startedAt ? (
+                            <div title={new Date(job.startedAt).toLocaleString()}>
+                              开始 {formatRelative(job.startedAt, now)}
+                            </div>
+                          ) : null}
+                          {job.enqueuedAt ? (
+                            <div title={new Date(job.enqueuedAt).toLocaleString()}>
+                              入队 {formatRelative(job.enqueuedAt, now)}
+                            </div>
+                          ) : (
+                            <div>入队时间未知</div>
+                          )}
+                        </div>
+                        <div className="text-claw-muted font-mono truncate" title={job.jobId}>
+                          #{shortJobId(job.jobId)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Recent runs */}
           {data.recentRuns.length > 0 && (

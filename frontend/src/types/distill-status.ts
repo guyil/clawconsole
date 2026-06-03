@@ -93,12 +93,16 @@ export interface DistillStatusInFlight {
   jobId: string;
   agentDbId: string;
   agentId: string | null;
+  agentName?: string | null;
+  machineId?: string | null;
   machineAlias: string | null;
+  machineName?: string | null;
   state: 'waiting' | 'active';
   /** ISO-8601 of when the job was enqueued. */
   enqueuedAt: string | null;
   /** ISO-8601 of when a worker started processing, or null while waiting. */
   startedAt: string | null;
+  source?: string | null;
 }
 
 export interface DistillStatus {
