@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useMachine, useHealthCheck, useDiscover } from '../hooks/useMachines';
 import { useAgentsByMachine } from '../hooks/useAgents';
 import { AgentCard } from '../components/machines/AgentCard';
@@ -18,6 +18,7 @@ type Tab = 'agents' | 'skills' | 'model' | 'files' | 'sync';
 
 export function MachineDetailPage() {
   const { machineId } = useParams<{ machineId: string }>();
+  const navigate = useNavigate();
   const { data: machine, isLoading } = useMachine(machineId!);
   const { data: agentsData } = useAgentsByMachine(machineId!);
   const healthCheck = useHealthCheck();
@@ -179,7 +180,11 @@ export function MachineDetailPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {agents.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  onClick={() => navigate(`/bots/${agent.id}`)}
+                />
               ))}
             </div>
           )}
