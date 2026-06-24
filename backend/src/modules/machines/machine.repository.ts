@@ -65,6 +65,10 @@ export class MachineRepository {
       ssh_port: input.sshPort ?? 22,
       ssh_password: input.sshPassword ?? null,
       openclaw_home: input.openclawHome ?? '~/.openclaw',
+      gateway_port: input.gatewayPort ?? null,
+      direct_connect: input.directConnect ?? false,
+      gateway_token: input.gatewayToken ?? null,
+      gateway_aes_key: input.gatewayAesKey ?? null,
       tags: input.tags ? JSON.stringify(input.tags) : null,
       status: 'unknown',
       created_at: now,
@@ -82,6 +86,10 @@ export class MachineRepository {
     if (input.sshPort !== undefined) updates.ssh_port = input.sshPort;
     if (input.sshPassword !== undefined) updates.ssh_password = input.sshPassword;
     if (input.openclawHome !== undefined) updates.openclaw_home = input.openclawHome;
+    if (input.gatewayPort !== undefined) updates.gateway_port = input.gatewayPort;
+    if (input.directConnect !== undefined) updates.direct_connect = input.directConnect;
+    if (input.gatewayToken !== undefined) updates.gateway_token = input.gatewayToken;
+    if (input.gatewayAesKey !== undefined) updates.gateway_aes_key = input.gatewayAesKey;
     if (input.tags !== undefined) updates.tags = JSON.stringify(input.tags);
 
     await this.db('machines').where('id', id).update(updates);
@@ -142,6 +150,10 @@ export class MachineRepository {
       sshUser: row.ssh_user as string,
       sshPort: row.ssh_port as number,
       sshPassword: (row.ssh_password as string | null) ?? null,
+      gatewayPort: (row.gateway_port as number | null) ?? null,
+      directConnect: Boolean(row.direct_connect),
+      gatewayToken: (row.gateway_token as string | null) ?? null,
+      gatewayAesKey: (row.gateway_aes_key as string | null) ?? null,
       osInfo: row.os_info as string | null,
       openclawVersion: row.openclaw_version as string | null,
       openclawHome: row.openclaw_home as string,

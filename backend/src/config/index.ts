@@ -62,13 +62,18 @@ export const config = {
 
   // Single-shared-password auth gate. When ``password`` and ``secret`` are
   // both set, every /api/* request must carry a valid bearer token issued
-  // by POST /api/auth/login (whitelist in auth.middleware.ts). Leaving
+  // by POST /api/auth/login (whitelist in authz.ts). Leaving
   // either unset disables the gate (with a warning log on boot) so a
   // half-configured staging box can still serve traffic.
   auth: {
     password: optionalEnv('APP_PASSWORD', ''),
     secret: optionalEnv('APP_AUTH_SECRET', ''),
     tokenTtlS: intEnv('APP_AUTH_TOKEN_TTL_S', 60 * 60 * 24 * 7), // 7 days
+    // Password for the bootstrap admin, seeded only when the users table is
+    // empty. Falls back to APP_PASSWORD so existing single-password deploys
+    // get a working admin login without extra config.
+    adminInitPassword: optionalEnv('ADMIN_INIT_PASSWORD', '') || optionalEnv('APP_PASSWORD', ''),
+    adminInitUsername: optionalEnv('ADMIN_INIT_USERNAME', 'admin'),
   },
 
   ssh: {
@@ -173,6 +178,15 @@ export const config = {
     timezone: optionalEnv('DAILY_OSS_BACKUP_TIMEZONE', 'Asia/Shanghai'),
     concurrency: intEnv('DAILY_OSS_BACKUP_CONCURRENCY', 2),
     perAgentTimeoutMs: intEnv('DAILY_OSS_BACKUP_PER_AGENT_TIMEOUT_MS', 600_000),
+  },
+
+  // Console Chat: identity stamped into the ERP X-AUTH-TOKEN that clawconsole
+  // mints when an operator chats with a bot from the Chat menu. Fixed operator
+  // identity (decided by product): every console chat runs with this data
+  // scope, so no clawconsole-user -> data-platform-account mapping is needed.
+  chat: {
+    operatorUserId: optionalEnv('CHAT_OPERATOR_USER_ID', '1'),
+    operatorUserName: optionalEnv('CHAT_OPERATOR_USER_NAME', 'console-operator'),
   },
 } as const;
 

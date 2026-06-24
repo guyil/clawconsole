@@ -172,6 +172,13 @@ export interface InsertDiagnosticEventInput {
 
 // --- Query filters ---
 
+/**
+ * Restricts a monitoring query to a set of (machineId, agentSlug) bots.
+ * Used to scope a developer to only their assigned bots. ``undefined`` means
+ * unrestricted (admin); an empty array means "no bots" → matches nothing.
+ */
+export type AllowedAgentKeys = Array<[string, string]>;
+
 export interface SessionSnapshotFilters {
   machineId?: string;
   agentId?: string;
@@ -179,6 +186,7 @@ export interface SessionSnapshotFilters {
   activeMinutes?: number;
   limit?: number;
   offset?: number;
+  allowedAgentKeys?: AllowedAgentKeys;
 }
 
 export interface SessionMessageFilters {
@@ -199,6 +207,7 @@ export interface GatewayLogFilters {
   query?: string;
   limit?: number;
   offset?: number;
+  allowedAgentKeys?: AllowedAgentKeys;
 }
 
 export interface DiagnosticEventFilters {
@@ -208,6 +217,11 @@ export interface DiagnosticEventFilters {
   since?: string;
   limit?: number;
   offset?: number;
+  /**
+   * diagnostic_events has no agent_id column, so developer scoping falls back
+   * to the machines that host their assigned bots. ``undefined`` = admin.
+   */
+  allowedMachineIds?: string[];
 }
 
 // --- Dashboard ---

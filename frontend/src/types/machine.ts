@@ -10,6 +10,10 @@ export interface Machine {
   sshUser: string;
   sshPort: number;
   sshPassword: string | null;
+  gatewayPort: number | null;
+  directConnect: boolean;
+  gatewayToken: string | null;
+  gatewayAesKey: string | null;
   osInfo: string | null;
   openclawVersion: string | null;
   openclawHome: string;
@@ -31,6 +35,10 @@ export interface CreateMachineInput {
   sshPassword?: string;
   openclawHome?: string;
   tags?: string[];
+  gatewayPort?: number;
+  directConnect?: boolean;
+  gatewayToken?: string;
+  gatewayAesKey?: string;
 }
 
 export interface UpdateMachineInput {
@@ -40,6 +48,10 @@ export interface UpdateMachineInput {
   sshPassword?: string | null;
   openclawHome?: string;
   tags?: string[];
+  gatewayPort?: number | null;
+  directConnect?: boolean;
+  gatewayToken?: string | null;
+  gatewayAesKey?: string | null;
 }
 
 export interface MachineHealthCheck {

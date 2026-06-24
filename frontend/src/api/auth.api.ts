@@ -17,9 +17,22 @@ import axios from 'axios';
 
 const TOKEN_KEY = 'clawconsole_token';
 
+export type UserRole = 'admin' | 'developer';
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: UserRole;
+  status: 'active' | 'disabled';
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LoginResponse {
   token: string;
   expiresAt: number;
+  user: AuthUser;
 }
 
 export function getToken(): string | null {
@@ -51,10 +64,10 @@ export function clearToken(): void {
  * interceptor) so a wrong password surfaces a plain rejection that the
  * login form can render inline, instead of triggering the global toast.
  */
-export async function login(password: string): Promise<LoginResponse> {
+export async function login(username: string, password: string): Promise<LoginResponse> {
   const res = await axios.post<LoginResponse>(
     '/api/auth/login',
-    { password },
+    { username, password },
     { headers: { 'Content-Type': 'application/json' }, timeout: 15_000 },
   );
   setToken(res.data.token);
@@ -83,13 +96,13 @@ export async function logout(): Promise<void> {
 }
 
 /**
- * GET /api/auth/me — used on app boot to validate the cached token. We
- * route this through the shared axios instance so a 401 also trips the
- * global response interceptor and clears the bad token in one shot.
+ * GET /api/auth/me — used on app boot to validate the cached token and
+ * recover the current user (role drives menu/route gating). Returns the
+ * user on success, ``null`` when the token is missing/invalid.
  */
-export async function verifyMe(): Promise<boolean> {
+export async function verifyMe(): Promise<AuthUser | null> {
   const token = getToken();
-  if (!token) return false;
+  if (!token) return null;
   try {
     const res = await axios.get('/api/auth/me', {
       headers: { Authorization: `Bearer ${token}` },
@@ -97,8 +110,11 @@ export async function verifyMe(): Promise<boolean> {
       // Don't toast — we use the result for routing, not user-facing errors.
       validateStatus: () => true,
     });
-    return res.status === 200 && Boolean(res.data?.ok);
+    if (res.status === 200 && res.data?.ok && res.data.user) {
+      return res.data.user as AuthUser;
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }

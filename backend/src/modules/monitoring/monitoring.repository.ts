@@ -20,7 +20,19 @@ import type {
   DiagnosticEventFilters,
   AgentUsageSummary,
   UsageSummary,
+  AllowedAgentKeys,
 } from './monitoring.types.js';
+
+/**
+ * Apply a developer's (machineId, agentSlug) scope to a query against a table
+ * that has ``machine_id`` + ``agent_id`` columns. ``undefined`` = unrestricted;
+ * an empty list matches nothing (the dev has no assigned bots).
+ */
+function applyAgentKeyScope(query: Knex.QueryBuilder, keys: AllowedAgentKeys | undefined): Knex.QueryBuilder {
+  if (keys === undefined) return query;
+  if (keys.length === 0) return query.whereRaw('1 = 0');
+  return query.whereIn(['machine_id', 'agent_id'], keys);
+}
 
 export class MonitoringRepository {
   private get db(): Knex {
@@ -93,6 +105,7 @@ export class MonitoringRepository {
       const cutoff = new Date(Date.now() - filters.activeMinutes * 60_000);
       query = query.where('last_activity_at', '>=', cutoff);
     }
+    query = applyAgentKeyScope(query, filters.allowedAgentKeys);
 
     const rows = await query.orderBy('last_activity_at', 'desc').limit(limit).offset(offset);
     return rows.map(this.toSessionSnapshot);
@@ -105,7 +118,12 @@ export class MonitoringRepository {
     return row ? this.toSessionSnapshot(row) : null;
   }
 
-  async countSessionSnapshots(filters: { machineId?: string; agentId?: string; activeMinutes?: number }): Promise<number> {
+  async countSessionSnapshots(filters: {
+    machineId?: string;
+    agentId?: string;
+    activeMinutes?: number;
+    allowedAgentKeys?: AllowedAgentKeys;
+  }): Promise<number> {
     let query = this.db('session_snapshots').count('* as cnt');
     if (filters.machineId) {
       query = query.where('machine_id', filters.machineId);
@@ -117,11 +135,15 @@ export class MonitoringRepository {
       const cutoff = new Date(Date.now() - filters.activeMinutes * 60_000);
       query = query.where('last_activity_at', '>=', cutoff);
     }
+    query = applyAgentKeyScope(query, filters.allowedAgentKeys);
     const result = await query.first();
     return Number(result?.cnt ?? 0);
   }
 
-  async getAgentUsageSummaries(machineId?: string): Promise<AgentUsageSummary[]> {
+  async getAgentUsageSummaries(
+    machineId?: string,
+    allowedAgentKeys?: AllowedAgentKeys,
+  ): Promise<AgentUsageSummary[]> {
     let query = this.db('session_snapshots')
       .select(
         'agent_id',
@@ -137,6 +159,7 @@ export class MonitoringRepository {
     if (machineId) {
       query = query.where('machine_id', machineId);
     }
+    query = applyAgentKeyScope(query, allowedAgentKeys);
 
     const rows = await query;
     return rows.map((r: Record<string, unknown>) => ({
@@ -150,7 +173,11 @@ export class MonitoringRepository {
     }));
   }
 
-  async getUsageSummary(filters: { machineId?: string; agentId?: string }): Promise<UsageSummary[]> {
+  async getUsageSummary(filters: {
+    machineId?: string;
+    agentId?: string;
+    allowedAgentKeys?: AllowedAgentKeys;
+  }): Promise<UsageSummary[]> {
     let query = this.db('session_snapshots')
       .select(
         'agent_id',
@@ -170,6 +197,7 @@ export class MonitoringRepository {
     if (filters.agentId) {
       query = query.where('agent_id', filters.agentId);
     }
+    query = applyAgentKeyScope(query, filters.allowedAgentKeys);
 
     const rows = await query;
     return rows.map((r: Record<string, unknown>) => ({
@@ -303,6 +331,7 @@ export class MonitoringRepository {
     if (filters.query) {
       query = query.where('message', 'like', `%${filters.query}%`);
     }
+    query = applyAgentKeyScope(query, filters.allowedAgentKeys);
 
     const rows = await query.orderBy('logged_at', 'desc').limit(limit).offset(offset);
     return rows.map(this.toGatewayLog);
@@ -373,12 +402,21 @@ export class MonitoringRepository {
     if (filters.since) {
       query = query.where('event_at', '>=', filters.since);
     }
+    if (filters.allowedMachineIds !== undefined) {
+      query = filters.allowedMachineIds.length
+        ? query.whereIn('machine_id', filters.allowedMachineIds)
+        : query.whereRaw('1 = 0');
+    }
 
     const rows = await query.orderBy('event_at', 'desc').limit(limit).offset(offset);
     return rows.map(this.toDiagnosticEvent);
   }
 
-  async getRecentErrorCount(machineId?: string, sinceMinutes = 60): Promise<number> {
+  async getRecentErrorCount(
+    machineId?: string,
+    sinceMinutes = 60,
+    allowedMachineIds?: string[],
+  ): Promise<number> {
     const cutoff = new Date(Date.now() - sinceMinutes * 60_000).toISOString();
     let query = this.db('diagnostic_events')
       .where('event_at', '>=', cutoff)
@@ -390,6 +428,11 @@ export class MonitoringRepository {
 
     if (machineId) {
       query = query.where('machine_id', machineId);
+    }
+    if (allowedMachineIds !== undefined) {
+      query = allowedMachineIds.length
+        ? query.whereIn('machine_id', allowedMachineIds)
+        : query.whereRaw('1 = 0');
     }
 
     const result = await query.first();

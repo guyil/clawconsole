@@ -16,6 +16,33 @@ export interface Machine {
   sshUser: string;
   sshPort: number;
   sshPassword: string | null;
+  /**
+   * Host port where this machine's openclaw gateway WS/HTTP is reachable
+   * (Docker-published per-machine port). When null, falls back to the
+   * global default `config.gateway.defaultPort` (18789).
+   */
+  gatewayPort: number | null;
+  /**
+   * When true this is a public-IP, Docker-hosted machine: skip the
+   * Tailscale ping gate and connect SSH/gateway directly to
+   * `tailscaleHostname` (which holds a raw IP). Default false so existing
+   * Tailscale machines are unchanged.
+   */
+  directConnect: boolean;
+  /**
+   * Shared-secret gateway operator token (openclaw `gateway.auth.token`).
+   * Used as the HTTP `Authorization: Bearer` for the admin-http-rpc surface
+   * (`POST /api/v1/admin/rpc`) on directConnect machines, since a remote
+   * shared-token WebSocket client cannot self-declare operator scopes.
+   */
+  gatewayToken: string | null;
+  /**
+   * Per-machine ERP `X_AUTH_TOKEN_AES_KEY`. Used by the console Chat proxy to
+   * mint a short-lived X-AUTH-TOKEN (fixed operator identity) when forwarding a
+   * chat turn to this machine's gateway `/v1/chat/completions`. Only set on
+   * Chat-enabled directConnect machines.
+   */
+  gatewayAesKey: string | null;
   osInfo: string | null;
   openclawVersion: string | null;
   openclawHome: string;
@@ -38,6 +65,10 @@ export interface CreateMachineInput {
   sshPassword?: string;
   openclawHome?: string;
   tags?: string[];
+  gatewayPort?: number;
+  directConnect?: boolean;
+  gatewayToken?: string;
+  gatewayAesKey?: string;
 }
 
 export interface UpdateMachineInput {
@@ -48,6 +79,10 @@ export interface UpdateMachineInput {
   sshPassword?: string | null;
   openclawHome?: string;
   tags?: string[];
+  gatewayPort?: number | null;
+  directConnect?: boolean;
+  gatewayToken?: string | null;
+  gatewayAesKey?: string | null;
 }
 
 export interface MachineHealthCheck {

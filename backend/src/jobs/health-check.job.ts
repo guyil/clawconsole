@@ -20,12 +20,15 @@ export function createHealthCheckHandler(
 
       try {
         const result = await machineService.healthCheck(machine.id);
-        if (gatewayPool && config.gateway.connectorEnabled) {
+        // directConnect (public-IP/Docker) machines are managed over HTTP
+        // (admin-http-rpc); a remote shared-token WS client gets no operator
+        // scopes, so skip the WebSocket pool for them.
+        if (gatewayPool && config.gateway.connectorEnabled && !machine.directConnect) {
           if (result.status === 'online' && !gatewayPool.isConnected(machine.id)) {
             gatewayPool.addMachine({
               machineId: machine.id,
               host: machine.tailscaleHostname,
-              port: config.gateway.defaultPort,
+              port: machine.gatewayPort ?? config.gateway.defaultPort,
             });
           } else if (result.status === 'offline') {
             gatewayPool.removeMachine(machine.id);

@@ -14,6 +14,7 @@ import { DistillToMiniclawModal } from '../components/bots/DistillToMiniclawModa
 import { DistillStatusModal } from '../components/bots/DistillStatusModal';
 import { ConfigureFeishuModal } from '../components/bots/ConfigureFeishuModal';
 import { Bot, Server, Puzzle, Plus, Trash2, Sparkles, RefreshCw, CloudUpload, AlertCircle } from 'lucide-react';
+import { useIsAdmin } from '../stores/auth.store';
 import type { AgentWithMachine } from '../types/agent';
 
 const statusLabels: Record<string, string> = {
@@ -52,9 +53,10 @@ interface BotCardProps {
   onClick: () => void;
   onDelete: (e: React.MouseEvent) => void;
   onConfigureFeishu: (e: React.MouseEvent) => void;
+  canManage: boolean;
 }
 
-function BotCard({ agent, onClick, onDelete, onConfigureFeishu }: BotCardProps) {
+function BotCard({ agent, onClick, onDelete, onConfigureFeishu, canManage }: BotCardProps) {
   const isProvisionable = PROVISIONABLE_STATUSES.has(agent.status);
   return (
     <div
@@ -74,13 +76,15 @@ function BotCard({ agent, onClick, onDelete, onConfigureFeishu }: BotCardProps) 
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={onDelete}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-red-500/20 text-claw-muted hover:text-red-400"
-            title="删除 Bot"
-          >
-            <Trash2 size={14} />
-          </button>
+          {canManage && (
+            <button
+              onClick={onDelete}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-red-500/20 text-claw-muted hover:text-red-400"
+              title="删除 Bot"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
           <StatusDot status={agent.status === 'online' ? 'running' : agent.status === 'offline' ? 'offline' : 'paused'} />
         </div>
       </div>
@@ -128,7 +132,7 @@ function BotCard({ agent, onClick, onDelete, onConfigureFeishu }: BotCardProps) 
         </span>
       </div>
 
-      {isProvisionable && (
+      {canManage && isProvisionable && (
         <div className="mt-3 pt-3 border-t border-claw-border/60">
           <button
             onClick={onConfigureFeishu}
@@ -149,6 +153,7 @@ const NODE_FILTER_STORAGE_KEY = 'clawconsole:bots:nodeFilter';
 export function BotsPage() {
   const { data, isLoading } = useAllAgents();
   const navigate = useNavigate();
+  const isAdmin = useIsAdmin();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [distillOpen, setDistillOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -221,7 +226,7 @@ export function BotsPage() {
           {draftCount > 0 && (
             <span className="text-claw-warning">· {draftCount} 个待部署</span>
           )}
-          {statusSummary && statusSummary.summary.total > 0 && (
+          {isAdmin && statusSummary && statusSummary.summary.total > 0 && (
             <button
               type="button"
               onClick={() => setStatusOpen(true)}
@@ -242,39 +247,41 @@ export function BotsPage() {
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={<RefreshCw size={14} className={discoverAll.isPending ? 'animate-spin' : ''} />}
-            loading={discoverAll.isPending}
-            onClick={() => discoverAll.mutate()}
-            title="扫描所有在线节点上的 workspace-* 文件夹，新发现的 Bot 会以「草稿」状态显示在列表中"
-          >
-            刷新
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={<CloudUpload size={14} />}
-            onClick={() => setStatusOpen(true)}
-            title="查看每日蒸馏到 OSS 的执行状态、下次执行时间、逐 agent 成败"
-          >
-            OSS 蒸馏状态
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={<Sparkles size={14} />}
-            onClick={() => setDistillOpen(true)}
-            title="将所有 OpenClaw agents + 它们的 skills 蒸馏到 Mini Claw 的 Agents Hub"
-          >
-            蒸馏到 Mini Claw
-          </Button>
-          <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
-            新建 Bot
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<RefreshCw size={14} className={discoverAll.isPending ? 'animate-spin' : ''} />}
+              loading={discoverAll.isPending}
+              onClick={() => discoverAll.mutate()}
+              title="扫描所有在线节点上的 workspace-* 文件夹，新发现的 Bot 会以「草稿」状态显示在列表中"
+            >
+              刷新
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<CloudUpload size={14} />}
+              onClick={() => setStatusOpen(true)}
+              title="查看每日蒸馏到 OSS 的执行状态、下次执行时间、逐 agent 成败"
+            >
+              OSS 蒸馏状态
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Sparkles size={14} />}
+              onClick={() => setDistillOpen(true)}
+              title="将所有 OpenClaw agents + 它们的 skills 蒸馏到 Mini Claw 的 Agents Hub"
+            >
+              蒸馏到 Mini Claw
+            </Button>
+            <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
+              新建 Bot
+            </Button>
+          </div>
+        )}
       </div>
 
       <CreateBotWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
@@ -327,22 +334,28 @@ export function BotsPage() {
         <EmptyState
           icon={<Bot size={48} />}
           title="暂无 Bot"
-          description="请先在节点管理中注册节点并扫描 Agent，或点击右上角「刷新」自动发现"
+          description={
+            isAdmin
+              ? '请先在节点管理中注册节点并扫描 Agent，或点击右上角「刷新」自动发现'
+              : '暂未给你分配 Bot，请联系管理员分配后再查看'
+          }
           action={
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<RefreshCw size={14} className={discoverAll.isPending ? 'animate-spin' : ''} />}
-                loading={discoverAll.isPending}
-                onClick={() => discoverAll.mutate()}
-              >
-                扫描节点
-              </Button>
-              <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
-                新建 Bot
-              </Button>
-            </div>
+            isAdmin ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<RefreshCw size={14} className={discoverAll.isPending ? 'animate-spin' : ''} />}
+                  loading={discoverAll.isPending}
+                  onClick={() => discoverAll.mutate()}
+                >
+                  扫描节点
+                </Button>
+                <Button size="sm" icon={<Plus size={14} />} onClick={() => setWizardOpen(true)}>
+                  新建 Bot
+                </Button>
+              </div>
+            ) : undefined
           }
         />
       ) : (
@@ -359,6 +372,7 @@ export function BotsPage() {
                   <BotCard
                     key={agent.id}
                     agent={agent}
+                    canManage={isAdmin}
                     onClick={() => navigate(`/bots/${agent.id}`)}
                     onDelete={(e) => { e.stopPropagation(); setDeleteTarget(agent); }}
                     onConfigureFeishu={(e) => { e.stopPropagation(); setFeishuTarget(agent); }}

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { SummaryService } from './summary.service.js';
 import type { AgentRepository } from '../agents/agent.repository.js';
 import { AppError } from '../../shared/errors.js';
+import { isAgentInScope } from '../auth/authz.js';
 import type { GenerationTarget } from './summary.types.js';
 
 const ListQuerySchema = z.object({
@@ -56,6 +57,7 @@ export function registerSummaryRoutes(
       until: q.until ? new Date(q.until) : undefined,
       limit: q.limit,
       offset: q.offset,
+      allowedAgentUuids: request.authScope?.agentUuids,
     };
     const { limit: _l, offset: _o, ...countFilters } = filters;
     void _l; void _o;
@@ -71,6 +73,9 @@ export function registerSummaryRoutes(
     if (Number.isNaN(id)) throw new AppError('Invalid id', 'VALIDATION_ERROR', 400);
     const row = await service.getSummary(id);
     if (!row) throw new AppError('Summary not found', 'NOT_FOUND', 404);
+    if (request.authScope && (!row.agentUuid || !isAgentInScope(request.authScope, row.agentUuid))) {
+      throw new AppError('Forbidden', 'FORBIDDEN', 403);
+    }
     return row;
   });
 

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { SyncEngine } from './sync-engine.js';
 import type { SyncRepository } from './sync.repository.js';
 import type { MachineService } from '../machines/machine.service.js';
+import type { AgentRepository } from '../agents/agent.repository.js';
 import { AppError } from '../../shared/errors.js';
 
 const PushSyncSchema = z.object({
@@ -16,6 +17,7 @@ export function registerSyncRoutes(
   syncEngine: SyncEngine,
   syncRepository: SyncRepository,
   machineService: MachineService,
+  agentRepo: AgentRepository,
 ) {
   fastify.post('/api/machines/:machineId/sync/pull', async (request) => {
     const { machineId } = request.params as { machineId: string };
@@ -56,6 +58,29 @@ export function registerSyncRoutes(
   fastify.post('/api/machines/:machineId/sync/push', async (request) => {
     const { machineId } = request.params as { machineId: string };
     const body = PushSyncSchema.parse(request.body ?? {});
+
+    // Developers (authScope present) may push, but only their own assigned
+    // bots' files on this node. The authz layer already verified the machine
+    // is in scope; here we ensure every pushed file lives under one of the
+    // developer's assigned bots' workspaces, and forbid the "push everything
+    // dirty" form so they can't sweep up another bot's pending edits.
+    if (request.authScope) {
+      const files = body?.files ?? [];
+      if (files.length === 0) {
+        throw new AppError('Developers must specify which files to push', 'FORBIDDEN', 403);
+      }
+      const assigned = await Promise.all(
+        request.authScope.agentUuids.map((id) => agentRepo.findById(id)),
+      );
+      const allowedPrefixes = assigned
+        .filter((a): a is NonNullable<typeof a> => a != null && a.machineId === machineId)
+        .map((a) => `${a.workspacePath ?? 'workspace'}/`);
+      const outOfScope = files.filter((f) => !allowedPrefixes.some((p) => f.startsWith(p)));
+      if (outOfScope.length > 0) {
+        throw new AppError('One or more files are outside your assigned bots', 'FORBIDDEN', 403);
+      }
+    }
+
     const machine = await machineService.getMachine(machineId);
     const connInfo = machineService.toConnectionInfo(machine);
 

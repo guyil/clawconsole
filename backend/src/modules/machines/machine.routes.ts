@@ -12,6 +12,10 @@ const CreateMachineSchema = z.object({
   sshPassword: z.string().max(255).optional(),
   openclawHome: z.string().max(500).optional(),
   tags: z.array(z.string()).optional(),
+  gatewayPort: z.number().int().min(1).max(65535).optional(),
+  directConnect: z.boolean().optional(),
+  gatewayToken: z.string().max(255).optional(),
+  gatewayAesKey: z.string().max(255).optional(),
 });
 
 const UpdateMachineSchema = z.object({
@@ -21,6 +25,10 @@ const UpdateMachineSchema = z.object({
   sshPassword: z.string().max(255).nullable().optional(),
   openclawHome: z.string().max(500).optional(),
   tags: z.array(z.string()).optional(),
+  gatewayPort: z.number().int().min(1).max(65535).nullable().optional(),
+  directConnect: z.boolean().optional(),
+  gatewayToken: z.string().max(255).nullable().optional(),
+  gatewayAesKey: z.string().max(255).nullable().optional(),
 });
 
 export function registerMachineRoutes(
@@ -30,21 +38,33 @@ export function registerMachineRoutes(
 ) {
   fastify.get('/api/machines', async (request) => {
     const query = request.query as Record<string, string>;
-    const machines = await machineService.listMachines({
+    let machines = await machineService.listMachines({
       status: query.status as any,
       tag: query.tag,
     });
+    // Developers only see nodes that host one of their assigned bots, and
+    // never the SSH credential (read-only monitoring access).
+    if (request.authScope) {
+      const allowed = new Set(request.authScope.machineIds);
+      machines = machines
+        .filter((m) => allowed.has(m.id))
+        .map((m) => ({ ...m, sshPassword: null, gatewayToken: null, gatewayAesKey: null }));
+    }
     return { data: machines, total: machines.length };
   });
 
   fastify.post('/api/machines', async (request, reply) => {
     const body = CreateMachineSchema.parse(request.body);
     const machine = await machineService.createMachine(body);
-    gatewayPool?.addMachine({
-      machineId: machine.id,
-      host: machine.tailscaleHostname,
-      port: config.gateway.defaultPort,
-    });
+    // directConnect machines are managed over HTTP admin-http-rpc, not the
+    // WebSocket pool (a remote shared-token WS client is granted no scopes).
+    if (!machine.directConnect) {
+      gatewayPool?.addMachine({
+        machineId: machine.id,
+        host: machine.tailscaleHostname,
+        port: machine.gatewayPort ?? config.gateway.defaultPort,
+      });
+    }
     return reply.status(201).send(machine);
   });
 
@@ -70,12 +90,12 @@ export function registerMachineRoutes(
     const { machineId } = request.params as { machineId: string };
     const result = await machineService.healthCheck(machineId);
     if (gatewayPool && config.gateway.connectorEnabled) {
-      if (result.status === 'online') {
-        const machine = await machineService.getMachine(machineId);
+      const machine = await machineService.getMachine(machineId);
+      if (result.status === 'online' && !machine.directConnect) {
         gatewayPool.addMachine({
           machineId,
           host: machine.tailscaleHostname,
-          port: config.gateway.defaultPort,
+          port: machine.gatewayPort ?? config.gateway.defaultPort,
         });
       } else {
         gatewayPool.removeMachine(machineId);

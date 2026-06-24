@@ -9,7 +9,9 @@ import type {
   GatewayLogFilters,
   DiagnosticEventFilters,
   MonitoringDashboard,
+  AllowedAgentKeys,
 } from './monitoring.types.js';
+import type { AuthScope } from '../users/user.service.js';
 import { config } from '../../config/index.js';
 import { createChildLogger } from '../../shared/logger.js';
 
@@ -33,6 +35,7 @@ export class MonitoringService {
         machineId: filters.machineId,
         agentId: filters.agentId,
         activeMinutes: filters.activeMinutes,
+        allowedAgentKeys: filters.allowedAgentKeys,
       }),
     ]);
     return { data: sessions, total };
@@ -64,13 +67,19 @@ export class MonitoringService {
 
   // ─── Usage ───────────────────────────────────────────────────────
 
-  async getUsageSummary(filters: { machineId?: string; agentId?: string }) {
+  async getUsageSummary(filters: {
+    machineId?: string;
+    agentId?: string;
+    allowedAgentKeys?: AllowedAgentKeys;
+  }) {
     return this.repo.getUsageSummary(filters);
   }
 
   // ─── Dashboard ───────────────────────────────────────────────────
 
-  async getDashboard(machineId?: string): Promise<MonitoringDashboard> {
+  async getDashboard(machineId?: string, scope?: AuthScope): Promise<MonitoringDashboard> {
+    const allowedAgentKeys = scope?.agentKeys;
+    const allowedMachineIds = scope?.machineIds;
     const [
       totalSessions,
       activeSessions,
@@ -78,11 +87,11 @@ export class MonitoringService {
       recentEvents,
       errorCount,
     ] = await Promise.all([
-      this.repo.countSessionSnapshots({ machineId }),
-      this.repo.countSessionSnapshots({ machineId, activeMinutes: 30 }),
-      this.repo.getAgentUsageSummaries(machineId),
-      this.repo.findDiagnosticEvents({ machineId, limit: 20 }),
-      this.repo.getRecentErrorCount(machineId, 60),
+      this.repo.countSessionSnapshots({ machineId, allowedAgentKeys }),
+      this.repo.countSessionSnapshots({ machineId, activeMinutes: 30, allowedAgentKeys }),
+      this.repo.getAgentUsageSummaries(machineId, allowedAgentKeys),
+      this.repo.findDiagnosticEvents({ machineId, limit: 20, allowedMachineIds }),
+      this.repo.getRecentErrorCount(machineId, 60, allowedMachineIds),
     ]);
 
     const totalTokens = agentSummaries.reduce((sum, a) => sum + a.totalTokens, 0);

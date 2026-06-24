@@ -53,6 +53,11 @@ export interface SummaryFilters {
   until?: Date;
   limit?: number;
   offset?: number;
+  /**
+   * Restrict to a set of agent UUIDs (developer scoping). ``undefined`` =
+   * unrestricted; empty array matches nothing.
+   */
+  allowedAgentUuids?: string[];
 }
 
 export interface ActiveAgentInfo {

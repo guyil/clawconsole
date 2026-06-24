@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useSkill, useReviewSkill, useDeleteSkill, useSyncLocalSkill, useUpdateSkill, useSkillTags } from '../hooks/useSkills';
+import { useIsAdmin } from '../stores/auth.store';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -49,6 +50,7 @@ const sourceLabels: Record<string, string> = {
 export function SkillDetailPage() {
   const { skillId } = useParams<{ skillId: string }>();
   const { data: skill, isLoading } = useSkill(skillId!);
+  const isAdmin = useIsAdmin();
   const review = useReviewSkill();
   const deleteSkill = useDeleteSkill();
   const syncLocal = useSyncLocalSkill();
@@ -137,7 +139,8 @@ export function SkillDetailPage() {
             </div>
           </div>
 
-          {/* Actions */}
+          {/* Actions — all skill mutations are admin-only; developers view read-only. */}
+          {isAdmin && (
           <div className="flex gap-2">
             {skill.reviewStatus === 'pending' && (
               <>
@@ -196,6 +199,7 @@ export function SkillDetailPage() {
               删除
             </Button>
           </div>
+          )}
         </div>
 
         {/* Description */}
@@ -251,16 +255,21 @@ export function SkillDetailPage() {
                   className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-claw-accent/10 text-claw-accent border border-claw-accent/20 rounded-full text-xs"
                 >
                   {tag}
-                  <button
-                    onClick={() => handleRemoveTag(tag)}
-                    className="text-claw-accent/60 hover:text-claw-accent cursor-pointer transition-colors"
-                    title="移除标签"
-                  >
-                    <X size={11} />
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleRemoveTag(tag)}
+                      className="text-claw-accent/60 hover:text-claw-accent cursor-pointer transition-colors"
+                      title="移除标签"
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
                 </span>
               ))}
-              {showTagInput ? (
+              {existingTags.length === 0 && !isAdmin && (
+                <span className="text-claw-muted/50 text-xs">无标签</span>
+              )}
+              {isAdmin && (showTagInput ? (
                 <div className="flex items-center gap-1">
                   <input
                     autoFocus
@@ -300,7 +309,7 @@ export function SkillDetailPage() {
                   <Plus size={11} />
                   添加标签
                 </button>
-              )}
+              ))}
             </div>
           </div>
         </div>

@@ -28,6 +28,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class ForbiddenError extends AppError {
+  constructor(message: string) {
+    super(message, 'FORBIDDEN', 403);
+  }
+}
+
 export class MachineUnreachableError extends AppError {
   constructor(machineId: string, reason: string) {
     super(

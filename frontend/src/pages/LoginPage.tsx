@@ -2,40 +2,43 @@ import { useState, type FormEvent } from 'react';
 import { Lock } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { login } from '../api/auth.api';
+import { useAuthStore } from '../stores/auth.store';
 
 /**
- * Single-shared-password login screen. Rendered by ``App`` whenever
- * there is no valid token in localStorage. On successful login we just
- * reload — that flips ``App``'s auth state and mounts the real routes,
- * and any data hooks start fetching with the new token attached by the
- * axios interceptor in ``api/client.ts``.
+ * Username + password login screen. Rendered by ``App`` whenever there is
+ * no valid token in localStorage. On success we cache the user (role drives
+ * menu gating) and flip ``App``'s auth state so the real routes mount; data
+ * hooks then fetch with the new token attached by the axios interceptor.
  */
 interface LoginPageProps {
   onSuccess?: () => void;
 }
 
 export function LoginPage({ onSuccess }: LoginPageProps) {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const setUser = useAuthStore((s) => s.setUser);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!password) {
-      setError('请输入密码');
+    if (!username || !password) {
+      setError('请输入用户名和密码');
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      await login(password);
+      const res = await login(username, password);
+      setUser(res.user);
       if (onSuccess) onSuccess();
       else window.location.reload();
     } catch (err) {
       const status = (err as { response?: { status?: number }; message?: string }).response?.status;
       const msg = (err as { response?: { data?: { error?: string } } }).response?.data?.error;
-      if (status === 401) setError(msg ?? '密码错误');
-      else if (status === 503) setError(msg ?? '服务端未配置 APP_PASSWORD');
+      if (status === 401) setError(msg ?? '用户名或密码错误');
+      else if (status === 503) setError(msg ?? '服务端未配置认证密钥');
       else setError(msg ?? (err as Error).message ?? '登录失败');
     } finally {
       setLoading(false);
@@ -53,8 +56,25 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
             <Lock size={22} />
           </div>
           <h1 className="text-lg font-bold text-claw-text">ClawConsole</h1>
-          <p className="text-xs text-claw-muted mt-1">请输入访问密码</p>
+          <p className="text-xs text-claw-muted mt-1">请输入用户名和密码</p>
         </div>
+
+        <label className="block text-xs text-claw-muted mb-2" htmlFor="username">
+          用户名
+        </label>
+        <input
+          id="username"
+          type="text"
+          autoFocus
+          autoComplete="username"
+          value={username}
+          onChange={(e) => {
+            setUsername(e.target.value);
+            if (error) setError(null);
+          }}
+          disabled={loading}
+          className="w-full px-3 py-2 mb-3 rounded-lg bg-claw-bg border border-claw-border text-claw-text text-sm focus:outline-none focus:border-claw-primary disabled:opacity-50"
+        />
 
         <label className="block text-xs text-claw-muted mb-2" htmlFor="password">
           密码
@@ -62,7 +82,6 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
         <input
           id="password"
           type="password"
-          autoFocus
           autoComplete="current-password"
           value={password}
           onChange={(e) => {

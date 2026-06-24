@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { MonitoringService } from './monitoring.service.js';
 import type { LogSource } from './monitoring.types.js';
+import { isAgentKeyInScope, isMachineInScope } from '../auth/authz.js';
+import { AppError } from '../../shared/errors.js';
 
 const SessionListSchema = z.object({
   machineId: z.string().uuid().optional(),
@@ -51,7 +53,7 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
 
   fastify.get('/api/monitoring/sessions', async (request) => {
     const filters = SessionListSchema.parse(request.query);
-    return service.listSessions(filters);
+    return service.listSessions({ ...filters, allowedAgentKeys: request.authScope?.agentKeys });
   });
 
   fastify.get('/api/monitoring/sessions/detail', async (request) => {
@@ -63,11 +65,20 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
     if (!snapshot) {
       return { error: 'Session not found', code: 'NOT_FOUND' };
     }
+    if (request.authScope && !isAgentKeyInScope(request.authScope, snapshot.machineId, snapshot.agentId)) {
+      throw new AppError('Forbidden', 'FORBIDDEN', 403);
+    }
     return snapshot;
   });
 
   fastify.get('/api/monitoring/sessions/transcript', async (request) => {
     const filters = TranscriptSchema.parse(request.query);
+    if (request.authScope) {
+      // Developers must target one of their assigned bots explicitly.
+      if (!filters.agentId || !isAgentKeyInScope(request.authScope, filters.machineId, filters.agentId)) {
+        throw new AppError('Forbidden', 'FORBIDDEN', 403);
+      }
+    }
     return service.getSessionTranscript(filters);
   });
 
@@ -78,6 +89,7 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
     return service.listLogs({
       ...filters,
       logSource: filters.logSource as LogSource | undefined,
+      allowedAgentKeys: request.authScope?.agentKeys,
     });
   });
 
@@ -85,14 +97,20 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
 
   fastify.get('/api/monitoring/events', async (request) => {
     const filters = EventListSchema.parse(request.query);
-    return service.listDiagnosticEvents(filters);
+    return service.listDiagnosticEvents({
+      ...filters,
+      allowedMachineIds: request.authScope?.machineIds,
+    });
   });
 
   // ─── Usage ───────────────────────────────────────────────────────
 
   fastify.get('/api/monitoring/usage', async (request) => {
     const filters = UsageSummarySchema.parse(request.query);
-    const summaries = await service.getUsageSummary(filters);
+    const summaries = await service.getUsageSummary({
+      ...filters,
+      allowedAgentKeys: request.authScope?.agentKeys,
+    });
     return { data: summaries };
   });
 
@@ -100,7 +118,7 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
 
   fastify.get('/api/monitoring/dashboard', async (request) => {
     const { machineId } = request.query as { machineId?: string };
-    return service.getDashboard(machineId);
+    return service.getDashboard(machineId, request.authScope);
   });
 
   // ─── Sync Triggers ───────────────────────────────────────────────
@@ -109,6 +127,9 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
     const { machineId } = request.body as { machineId: string };
     if (!machineId) {
       return { error: 'machineId is required', code: 'VALIDATION_ERROR' };
+    }
+    if (request.authScope && !isMachineInScope(request.authScope, machineId)) {
+      throw new AppError('Forbidden', 'FORBIDDEN', 403);
     }
     return service.triggerSessionSync(machineId);
   });
@@ -122,6 +143,9 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
     if (!machineId || !sessionKey || !agentId) {
       return { error: 'machineId, sessionKey, and agentId are required', code: 'VALIDATION_ERROR' };
     }
+    if (request.authScope && !isAgentKeyInScope(request.authScope, machineId, agentId)) {
+      throw new AppError('Forbidden', 'FORBIDDEN', 403);
+    }
     return service.triggerTranscriptPull(machineId, sessionKey, agentId);
   });
 
@@ -129,6 +153,9 @@ export function registerMonitoringRoutes(fastify: FastifyInstance, service: Moni
     const { machineId } = request.body as { machineId: string };
     if (!machineId) {
       return { error: 'machineId is required', code: 'VALIDATION_ERROR' };
+    }
+    if (request.authScope && !isMachineInScope(request.authScope, machineId)) {
+      throw new AppError('Forbidden', 'FORBIDDEN', 403);
     }
     return service.triggerLogCollection(machineId);
   });

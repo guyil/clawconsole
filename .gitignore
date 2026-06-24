@@ -46,3 +46,4 @@ Thumbs.db
 # Default location is <repo>/backups/<machine>/<timestamp>/. Override
 # with BACKUP_ROOT to write elsewhere; that path is up to you to ignore.
 backups/
+.gstack/

@@ -70,6 +70,11 @@ export class SummaryRepository {
     if (filters.status) query = query.where('status', filters.status);
     if (filters.since) query = query.where('period_end_at', '>=', toMysqlDate(filters.since));
     if (filters.until) query = query.where('period_end_at', '<=', toMysqlDate(filters.until));
+    if (filters.allowedAgentUuids !== undefined) {
+      query = filters.allowedAgentUuids.length
+        ? query.whereIn('agent_uuid', filters.allowedAgentUuids)
+        : query.whereRaw('1 = 0');
+    }
 
     const rows = await query.orderBy('period_end_at', 'desc').limit(limit).offset(offset);
     return rows.map(this.toSummary);
@@ -84,6 +89,11 @@ export class SummaryRepository {
     if (filters.status) query = query.where('status', filters.status);
     if (filters.since) query = query.where('period_end_at', '>=', toMysqlDate(filters.since));
     if (filters.until) query = query.where('period_end_at', '<=', toMysqlDate(filters.until));
+    if (filters.allowedAgentUuids !== undefined) {
+      query = filters.allowedAgentUuids.length
+        ? query.whereIn('agent_uuid', filters.allowedAgentUuids)
+        : query.whereRaw('1 = 0');
+    }
     const result = await query.first();
     return Number(result?.cnt ?? 0);
   }

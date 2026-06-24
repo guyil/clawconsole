@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSkills, useReviewSkill, useSkillTags } from '../hooks/useSkills';
+import { useIsAdmin } from '../stores/auth.store';
 import { DataTable } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -29,6 +30,7 @@ const sourceLabels: Record<string, string> = {
 
 export function SkillsPage() {
   const navigate = useNavigate();
+  const isAdmin = useIsAdmin();
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTag, setFilterTag] = useState<string>('');
 
@@ -78,17 +80,19 @@ export function SkillsPage() {
             </button>
           ))}
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" icon={<FolderOpen size={16} />} onClick={() => setShowImportLocal(true)}>
-            从本地导入
-          </Button>
-          <Button variant="secondary" icon={<Link2 size={16} />} onClick={() => setShowImportUrl(true)}>
-            从 URL 导入
-          </Button>
-          <Button icon={<Plus size={16} />} onClick={() => setShowAdd(true)}>
-            添加 Skill
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex gap-2">
+            <Button variant="secondary" icon={<FolderOpen size={16} />} onClick={() => setShowImportLocal(true)}>
+              从本地导入
+            </Button>
+            <Button variant="secondary" icon={<Link2 size={16} />} onClick={() => setShowImportUrl(true)}>
+              从 URL 导入
+            </Button>
+            <Button icon={<Plus size={16} />} onClick={() => setShowAdd(true)}>
+              添加 Skill
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Tag filter */}
@@ -124,11 +128,13 @@ export function SkillsPage() {
         <EmptyState
           icon={<Puzzle size={48} />}
           title="暂无 Skills"
-          description="添加你的第一个 Skill 开始管理"
+          description={isAdmin ? '添加你的第一个 Skill 开始管理' : '目录中暂无 Skill'}
           action={
-            <Button onClick={() => setShowAdd(true)} icon={<Plus size={16} />}>
-              添加 Skill
-            </Button>
+            isAdmin ? (
+              <Button onClick={() => setShowAdd(true)} icon={<Plus size={16} />}>
+                添加 Skill
+              </Button>
+            ) : undefined
           }
         />
       ) : (
@@ -216,7 +222,7 @@ export function SkillsPage() {
               width: '1.5fr',
               render: (s) => (
                 <div className="flex gap-1.5">
-                  {s.reviewStatus === 'pending' && (
+                  {isAdmin && s.reviewStatus === 'pending' && (
                     <>
                       <Button
                         variant="primary"
@@ -238,7 +244,7 @@ export function SkillsPage() {
                       />
                     </>
                   )}
-                  {s.reviewStatus === 'approved' && (
+                  {isAdmin && s.reviewStatus === 'approved' && (
                     <Button
                       variant="primary"
                       size="sm"

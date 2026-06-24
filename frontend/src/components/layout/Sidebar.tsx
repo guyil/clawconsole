@@ -12,14 +12,17 @@ import {
   Shell,
   Activity,
   MessageSquare,
+  MessagesSquare,
   FileText,
   FileBarChart,
   FlaskConical,
   Terminal,
   Workflow,
   MonitorCheck,
+  Users,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
+import { useIsAdmin } from '../../stores/auth.store';
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
@@ -27,6 +30,8 @@ interface LeafItem {
   to: string;
   label: string;
   icon: IconType;
+  /** Visible to developers? Defaults to false (admin-only). */
+  developer?: boolean;
 }
 
 interface GroupItem {
@@ -38,6 +43,8 @@ interface GroupItem {
    */
   prefix: string;
   children: LeafItem[];
+  /** Visible to developers? Defaults to false (admin-only). */
+  developer?: boolean;
 }
 
 type NavItem = LeafItem | GroupItem;
@@ -49,11 +56,13 @@ function isGroup(item: NavItem): item is GroupItem {
 const NAV_ITEMS: NavItem[] = [
   { to: '/', label: '仪表盘', icon: LayoutDashboard },
   { to: '/machines', label: '节点管理', icon: Server },
-  { to: '/bots', label: 'Bot 管理', icon: Bot },
+  { to: '/bots', label: 'Bot 管理', icon: Bot, developer: true },
+  { to: '/chat', label: '对话', icon: MessagesSquare, developer: true },
   {
     label: '监测',
     icon: MonitorCheck,
     prefix: '/monitoring',
+    developer: true,
     children: [
       { to: '/monitoring', label: '活动监控', icon: Activity },
       { to: '/monitoring/sessions', label: '会话监控', icon: MessageSquare },
@@ -62,10 +71,11 @@ const NAV_ITEMS: NavItem[] = [
     ],
   },
   { to: '/workflows', label: '工作流', icon: Workflow },
-  { to: '/skills', label: 'Skills 中心', icon: Puzzle },
+  { to: '/skills', label: 'Skills 中心', icon: Puzzle, developer: true },
   { to: '/playground', label: 'Skills Playground', icon: FlaskConical },
   { to: '/assistant', label: 'AI 助手', icon: Terminal },
   { to: '/credentials', label: '凭证管理', icon: KeyRound },
+  { to: '/users', label: '用户管理', icon: Users },
   { to: '/settings', label: '系统设置', icon: Settings },
 ];
 
@@ -73,12 +83,16 @@ export function Sidebar() {
   const collapsed = useUIStore((s) => s.sidebarCollapsed);
   const toggle = useUIStore((s) => s.toggleSidebar);
   const location = useLocation();
+  const isAdmin = useIsAdmin();
+
+  // Developers only get the bot + monitoring surfaces; admins see everything.
+  const navItems = isAdmin ? NAV_ITEMS : NAV_ITEMS.filter((item) => item.developer);
 
   // Auto-expand any group that matches the active route. Users can still
   // toggle groups manually, but the initial render always reveals the
   // currently active section so the user isn't lost after navigation.
   const initialOpen: Record<string, boolean> = {};
-  for (const item of NAV_ITEMS) {
+  for (const item of navItems) {
     if (isGroup(item) && location.pathname.startsWith(item.prefix)) {
       initialOpen[item.label] = true;
     }
@@ -88,13 +102,14 @@ export function Sidebar() {
   useEffect(() => {
     setOpenGroups((prev) => {
       const next = { ...prev };
-      for (const item of NAV_ITEMS) {
+      for (const item of navItems) {
         if (isGroup(item) && location.pathname.startsWith(item.prefix)) {
           next[item.label] = true;
         }
       }
       return next;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
   return (
@@ -129,7 +144,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           if (!isGroup(item)) {
             return (
               <NavLink

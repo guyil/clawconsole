@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
 import { useWebSocketStore } from '../../stores/websocket.store';
+import { useAuthStore } from '../../stores/auth.store';
 import { StatusDot } from '../ui/StatusDot';
 import { logout } from '../../api/auth.api';
 
@@ -9,6 +10,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/machines': '节点管理',
   '/skills': 'Skills 中心',
   '/credentials': '凭证管理',
+  '/users': '用户管理',
   '/assistant': 'AI 助手',
   '/settings': '系统设置',
   '/workflows': '工作流',
@@ -18,6 +20,9 @@ const PAGE_TITLES: Record<string, string> = {
 export function Header() {
   const { pathname } = useLocation();
   const wsConnected = useWebSocketStore((s) => s.connected);
+  const user = useAuthStore((s) => s.user);
+  const initial = (user?.username?.[0] ?? 'A').toUpperCase();
+  const roleLabel = user?.role === 'developer' ? '开发者' : '管理员';
 
   const basePath = '/' + (pathname.split('/')[1] ?? '');
   const title =
@@ -31,8 +36,16 @@ export function Header() {
           <StatusDot status={wsConnected ? 'online' : 'offline'} size={6} />
           {wsConnected ? 'Gateway 在线' : 'Gateway 离线'}
         </div>
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-claw-primary to-claw-accent flex items-center justify-center text-white text-xs font-semibold">
-          A
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-claw-primary to-claw-accent flex items-center justify-center text-white text-xs font-semibold">
+            {initial}
+          </div>
+          {user && (
+            <div className="flex flex-col leading-tight">
+              <span className="text-xs text-claw-text font-medium">{user.username}</span>
+              <span className="text-[10px] text-claw-muted">{roleLabel}</span>
+            </div>
+          )}
         </div>
         <button
           type="button"

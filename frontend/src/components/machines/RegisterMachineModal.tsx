@@ -17,6 +17,10 @@ export function RegisterMachineModal({ open, onClose }: Props) {
     sshPort: '22',
     sshPassword: '',
     openclawHome: '~/.openclaw',
+    gatewayPort: '',
+    directConnect: false,
+    gatewayToken: '',
+    gatewayAesKey: '',
     tags: '',
   });
 
@@ -29,12 +33,16 @@ export function RegisterMachineModal({ open, onClose }: Props) {
         sshPort: form.sshPort ? parseInt(form.sshPort) : undefined,
         sshPassword: form.sshPassword || undefined,
         openclawHome: form.openclawHome || undefined,
+        gatewayPort: form.gatewayPort ? parseInt(form.gatewayPort) : undefined,
+        directConnect: form.directConnect || undefined,
+        gatewayToken: form.gatewayToken || undefined,
+        gatewayAesKey: form.gatewayAesKey || undefined,
         tags: form.tags ? form.tags.split(',').map((t) => t.trim()) : undefined,
       },
       {
         onSuccess: () => {
           onClose();
-          setForm({ name: '', tailscaleHostname: '', sshUser: 'claw', sshPort: '22', sshPassword: '', openclawHome: '~/.openclaw', tags: '' });
+          setForm({ name: '', tailscaleHostname: '', sshUser: 'claw', sshPort: '22', sshPassword: '', openclawHome: '~/.openclaw', gatewayPort: '', directConnect: false, gatewayToken: '', gatewayAesKey: '', tags: '' });
         },
       },
     );
@@ -99,6 +107,49 @@ export function RegisterMachineModal({ open, onClose }: Props) {
             className={inputClass}
             value={form.openclawHome}
             onChange={(e) => setForm({ ...form, openclawHome: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-claw-muted mb-1">Gateway 端口（可选）</label>
+          <input
+            className={inputClass}
+            type="number"
+            placeholder="留空使用默认 18789"
+            value={form.gatewayPort}
+            onChange={(e) => setForm({ ...form, gatewayPort: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="flex items-center gap-2 text-sm text-claw-text cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.directConnect}
+              onChange={(e) => setForm({ ...form, directConnect: e.target.checked })}
+            />
+            直连模式（公网 IP，跳过 Tailscale）
+          </label>
+          <p className="text-[11px] text-claw-muted mt-1">
+            勾选后将主机名按原始 IP 直连 SSH/Gateway，不做 Tailscale 探活。
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs text-claw-muted mb-1">Gateway Token（直连模式必填）</label>
+          <input
+            className={inputClass}
+            type="password"
+            placeholder="openclaw gateway.auth.token，用于 admin-http-rpc 发现 agent"
+            value={form.gatewayToken}
+            onChange={(e) => setForm({ ...form, gatewayToken: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-claw-muted mb-1">Gateway AES Key（Chat 功能必填）</label>
+          <input
+            className={inputClass}
+            type="password"
+            placeholder="X_AUTH_TOKEN_AES_KEY，用于 Chat 时签发 X-AUTH-TOKEN"
+            value={form.gatewayAesKey}
+            onChange={(e) => setForm({ ...form, gatewayAesKey: e.target.value })}
           />
         </div>
         <div>

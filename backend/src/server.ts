@@ -51,6 +51,9 @@ import { registerBotConfigAgentRoutes } from './modules/bot-config-agent/bot-con
 import { AssistantRepository } from './modules/assistant/assistant.repository.js';
 import { AssistantService } from './modules/assistant/assistant.service.js';
 import { registerAssistantRoutes } from './modules/assistant/assistant.routes.js';
+import { ChatRepository } from './modules/chat/chat.repository.js';
+import { ChatService } from './modules/chat/chat.service.js';
+import { registerChatRoutes } from './modules/chat/chat.routes.js';
 
 import { MonitoringRepository } from './modules/monitoring/monitoring.repository.js';
 import { MonitoringService } from './modules/monitoring/monitoring.service.js';
@@ -62,7 +65,10 @@ import { registerMonitoringRoutes } from './modules/monitoring/monitoring.routes
 import { ModelConfigService } from './modules/model-config/model-config.service.js';
 
 import { registerAuthRoutes } from './modules/auth/auth.routes.js';
-import { registerAuthHook } from './modules/auth/auth.middleware.js';
+import { registerAuthHooks } from './modules/auth/authz.js';
+import { UserRepository } from './modules/users/user.repository.js';
+import { UserService } from './modules/users/user.service.js';
+import { registerUserRoutes } from './modules/users/user.routes.js';
 
 import { registerWebSocket } from './websocket/ws-server.js';
 import {
@@ -196,11 +202,18 @@ async function main() {
 
   await fastify.register(cors, { origin: true });
 
-  // --- Auth (register BEFORE other routes so the global preHandler
-  // applies to everything that follows; auth routes themselves and
-  // /api/health are whitelisted inside auth.middleware.ts.) ---
-  registerAuthRoutes(fastify, config.auth);
-  registerAuthHook(fastify, config.auth);
+  // --- Users + Auth (register BEFORE other routes so the global authz
+  // preHandler applies to everything that follows; auth routes and
+  // /api/health are whitelisted inside authz.ts.) ---
+  const userRepo = new UserRepository();
+  const userService = new UserService(userRepo);
+  await userService.ensureInitialAdmin({
+    username: config.auth.adminInitUsername,
+    password: config.auth.adminInitPassword,
+  });
+  registerAuthRoutes(fastify, config.auth, userService);
+  registerAuthHooks(fastify, config.auth, userService);
+  registerUserRoutes(fastify, userService);
 
   // --- WebSocket ---
   await registerWebSocket(fastify, config.auth);
@@ -325,6 +338,10 @@ async function main() {
     platformSkills,
   });
 
+  // --- Console Chat (talk to bots via gateway /v1) ---
+  const chatRepo = new ChatRepository();
+  const chatService = new ChatService(chatRepo, { machineRepo, agentRepo });
+
   // --- Session Summaries (Gemini + Feishu) ---
   // Gemini client is constructed regardless of whether the API key is set;
   // the service and routes surface a clear 503 + warning when it's missing
@@ -383,13 +400,14 @@ async function main() {
 
   // --- Routes ---
   registerMachineRoutes(fastify, machineService, gatewayPool);
-  registerSyncRoutes(fastify, syncEngine, syncRepo, machineService);
+  registerSyncRoutes(fastify, syncEngine, syncRepo, machineService, agentRepo);
   registerCredentialRoutes(fastify, credentialService);
   registerSkillRoutes(fastify, skillService);
   registerMonitoringRoutes(fastify, monitoringService);
   registerPlaygroundRoutes(fastify, playgroundService);
   registerBotConfigAgentRoutes(fastify, botConfigAgentService);
   registerAssistantRoutes(fastify, assistantService);
+  registerChatRoutes(fastify, chatService);
   registerWorkflowRoutes(fastify, workflowService);
   registerEvoClawRoutes(fastify, ecaService);
   registerBackupRoutes(fastify, backupService);
@@ -407,15 +425,22 @@ async function main() {
   });
 
   // --- Agent Routes ---
-  fastify.get('/api/agents', async () => {
+  fastify.get('/api/agents', async (request) => {
     const agents = await agentRepo.findAll();
-    return { data: agents, total: agents.length };
+    // Developers only see bots assigned to them; admins (no authScope) see all.
+    const scoped = request.authScope
+      ? agents.filter((a) => request.authScope!.agentUuids.includes(a.id))
+      : agents;
+    return { data: scoped, total: scoped.length };
   });
 
   fastify.get('/api/machines/:machineId/agents', async (request) => {
     const { machineId } = request.params as { machineId: string };
     const agents = await agentRepo.findByMachineId(machineId);
-    return { data: agents, total: agents.length };
+    const scoped = request.authScope
+      ? agents.filter((a) => request.authScope!.agentUuids.includes(a.id))
+      : agents;
+    return { data: scoped, total: scoped.length };
   });
 
   fastify.post('/api/machines/:machineId/agents', async (request, reply) => {
@@ -1904,12 +1929,15 @@ async function main() {
     // Skipped when GATEWAY_CONNECTOR_ENABLED=false to avoid reconnect-loop
     // log spam when the remote gateway service is not running.
     if (config.gateway.connectorEnabled) {
-      const onlineMachines = await machineService.listMachines({ status: 'online' });
+      // directConnect (public-IP/Docker) machines are managed over HTTP
+      // admin-http-rpc, not the WebSocket pool, so exclude them here.
+      const onlineMachines = (await machineService.listMachines({ status: 'online' }))
+        .filter((m) => !m.directConnect);
       for (const machine of onlineMachines) {
         gatewayPool.addMachine({
           machineId: machine.id,
           host: machine.tailscaleHostname,
-          port: config.gateway.defaultPort,
+          port: machine.gatewayPort ?? config.gateway.defaultPort,
         });
       }
       if (onlineMachines.length > 0) {

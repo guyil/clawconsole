@@ -36,12 +36,22 @@ function hmac(secret: string, payload: string): Buffer {
 export interface TokenPayload {
   exp: number;
   v: typeof ALG_VERSION;
+  /**
+   * User id this token was issued for. Optional for backward compatibility:
+   * legacy shared-password tokens (and tokens minted before user accounts
+   * existed) carry no ``sub`` and are resolved to the admin role downstream.
+   */
+  sub?: string;
 }
 
-export function signToken(secret: string, ttlSeconds: number): { token: string; expiresAt: number } {
+export function signToken(
+  secret: string,
+  ttlSeconds: number,
+  sub?: string,
+): { token: string; expiresAt: number } {
   if (!secret) throw new Error('APP_AUTH_SECRET is required to sign auth tokens');
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const payload: TokenPayload = { exp, v: ALG_VERSION };
+  const payload: TokenPayload = sub ? { exp, v: ALG_VERSION, sub } : { exp, v: ALG_VERSION };
   const payloadStr = JSON.stringify(payload);
   const payloadB64 = base64UrlEncode(payloadStr);
   const sigB64 = base64UrlEncode(hmac(secret, payloadB64));

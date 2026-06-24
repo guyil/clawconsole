@@ -19,6 +19,7 @@ import type { SkillCatalogEntry } from '../types/skill';
 import EvoClawTab from '../components/bots/EvoClawTab';
 import { DistillBundlePreviewModal } from '../components/bots/DistillBundlePreviewModal';
 import { DistillStatusModal } from '../components/bots/DistillStatusModal';
+import { useIsAdmin } from '../stores/auth.store';
 import toast from 'react-hot-toast';
 
 const statusLabels: Record<string, string> = {
@@ -55,6 +56,7 @@ type Tab = 'config' | 'ai-config' | 'model' | 'memory' | 'skills' | 'evolution';
 
 export function BotDetailPage() {
   const { agentId } = useParams<{ agentId: string }>();
+  const isAdmin = useIsAdmin();
   const { data: agent, isLoading } = useAgent(agentId!);
   const { data: configData, isLoading: configLoading } = useAgentConfigFiles(agentId!);
   const { data: memoryData } = useAgentMemoryFiles(agentId!);
@@ -240,13 +242,17 @@ export function BotDetailPage() {
     }
   };
 
+  // Developers get a read-only view of their assigned bots: the
+  // management-heavy tabs (AI config assistant, Model config, 自进化)
+  // are full of mutations the backend rejects anyway, so we hide them
+  // and keep only the viewing surfaces (identity files, memory, skills).
   const tabs: { id: Tab; label: string; icon: typeof FileText; count?: number }[] = [
     { id: 'config', label: '身份配置', icon: FileText, count: sortedFiles.length },
-    { id: 'ai-config', label: 'AI 配置助手', icon: Sparkles },
-    { id: 'model', label: 'Model 配置', icon: Cpu },
+    ...(isAdmin ? [{ id: 'ai-config' as const, label: 'AI 配置助手', icon: Sparkles }] : []),
+    ...(isAdmin ? [{ id: 'model' as const, label: 'Model 配置', icon: Cpu }] : []),
     { id: 'memory', label: '记忆管理', icon: Brain, count: memoryFileCount },
     { id: 'skills', label: 'Skills', icon: Puzzle, count: totalDiscoveredSkills + installedSkills.length },
-    { id: 'evolution', label: '自进化', icon: Dna },
+    ...(isAdmin ? [{ id: 'evolution' as const, label: '自进化', icon: Dna }] : []),
   ];
 
   return (
@@ -317,15 +323,17 @@ export function BotDetailPage() {
                 ) : (
                   <h2 className="text-lg font-bold text-claw-text flex items-center gap-1.5 group">
                     <span>{agent.name || agent.agentId}</span>
-                    <button
-                      type="button"
-                      onClick={startEditName}
-                      title="重命名 Bot"
-                      aria-label="重命名 Bot"
-                      className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-1 rounded text-claw-muted hover:text-claw-primary-light"
-                    >
-                      <Pencil size={13} />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={startEditName}
+                        title="重命名 Bot"
+                        aria-label="重命名 Bot"
+                        className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-1 rounded text-claw-muted hover:text-claw-primary-light"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
                   </h2>
                 )}
                 <StatusDot status={agent.status === 'online' ? 'running' : agent.status === 'offline' ? 'offline' : 'paused'} />
@@ -337,16 +345,18 @@ export function BotDetailPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<Share2 size={14} />}
-              onClick={() => setShowDistillModal(true)}
-              title="预览蒸馏快照并推送到 Mini Claw 平台"
-            >
-              推送到 Mini Claw
-            </Button>
-            {agent.status === 'draft' && (
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Share2 size={14} />}
+                onClick={() => setShowDistillModal(true)}
+                title="预览蒸馏快照并推送到 Mini Claw 平台"
+              >
+                推送到 Mini Claw
+              </Button>
+            )}
+            {isAdmin && agent.status === 'draft' && (
               <Button
                 size="sm"
                 icon={<Rocket size={14} />}
@@ -356,7 +366,7 @@ export function BotDetailPage() {
                 部署 Bot
               </Button>
             )}
-            {(agent.status === 'offline' || agent.status === 'packaging') && (
+            {isAdmin && (agent.status === 'offline' || agent.status === 'packaging') && (
               <>
                 <Button
                   size="sm"
@@ -443,35 +453,37 @@ export function BotDetailPage() {
           */}
           <div className="flex items-center gap-2">
             <span className="text-claw-muted">每日蒸馏到 OSS:</span>
-            <label
-              className="inline-flex items-center cursor-pointer"
-              title={
-                agent.ossSyncEnabled
-                  ? '点击关闭后，每日 03:00 (Asia/Shanghai) 的自动同步会跳过这个 Bot；手动推送不受影响。'
-                  : '点击开启后，下一次每日定时任务会把这个 Bot 也同步到 OSS。'
-              }
-            >
-              <input
-                type="checkbox"
-                checked={agent.ossSyncEnabled}
-                disabled={toggleOssSync.isPending}
-                onChange={(e) =>
-                  toggleOssSync.mutate({
-                    agentId: agent.id,
-                    enabled: e.target.checked,
-                  })
+            {isAdmin && (
+              <label
+                className="inline-flex items-center cursor-pointer"
+                title={
+                  agent.ossSyncEnabled
+                    ? '点击关闭后，每日 03:00 (Asia/Shanghai) 的自动同步会跳过这个 Bot；手动推送不受影响。'
+                    : '点击开启后，下一次每日定时任务会把这个 Bot 也同步到 OSS。'
                 }
-                className="sr-only peer"
-                aria-label="切换每日蒸馏到 OSS"
-              />
-              <div className="w-9 h-5 bg-claw-border rounded-full peer-checked:bg-claw-primary relative transition-colors">
-                <div
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
-                    agent.ossSyncEnabled ? 'translate-x-4' : ''
-                  }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={agent.ossSyncEnabled}
+                  disabled={toggleOssSync.isPending}
+                  onChange={(e) =>
+                    toggleOssSync.mutate({
+                      agentId: agent.id,
+                      enabled: e.target.checked,
+                    })
+                  }
+                  className="sr-only peer"
+                  aria-label="切换每日蒸馏到 OSS"
                 />
-              </div>
-            </label>
+                <div className="w-9 h-5 bg-claw-border rounded-full peer-checked:bg-claw-primary relative transition-colors">
+                  <div
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                      agent.ossSyncEnabled ? 'translate-x-4' : ''
+                    }`}
+                  />
+                </div>
+              </label>
+            )}
             <span
               className={`text-xs ${
                 agent.ossSyncEnabled ? 'text-claw-success' : 'text-claw-muted'
@@ -606,6 +618,7 @@ export function BotDetailPage() {
                           if (!activeFile) return;
                           setConfigDrafts((prev) => ({ ...prev, [activeFile]: e.target.value }));
                         }}
+                        readOnly={false}
                         spellCheck={false}
                         className="flex-1 bg-claw-bg text-claw-text text-sm p-4 overflow-auto font-mono resize-none outline-none focus:ring-1 focus:ring-inset focus:ring-claw-primary/60"
                         aria-label={`${activeFile} 配置内容`}
@@ -657,17 +670,19 @@ export function BotDetailPage() {
       {/* Skills Tab */}
       {activeTab === 'skills' && (
         <div className="space-y-5">
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<RefreshCw size={13} className={rediscoverSkills.isPending ? 'animate-spin' : ''} />}
-              loading={rediscoverSkills.isPending}
-              onClick={() => rediscoverSkills.mutate(agentId!)}
-            >
-              刷新 Skills 发现
-            </Button>
-          </div>
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<RefreshCw size={13} className={rediscoverSkills.isPending ? 'animate-spin' : ''} />}
+                loading={rediscoverSkills.isPending}
+                onClick={() => rediscoverSkills.mutate(agentId!)}
+              >
+                刷新 Skills 发现
+              </Button>
+            </div>
+          )}
 
           {/* Discovered: Global Skills (shared across all agents on this machine) */}
           <div>
@@ -696,12 +711,14 @@ export function BotDetailPage() {
                         <div className="text-xs text-claw-muted">共享 · 节点级</div>
                       </div>
                     </div>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      icon={<Trash2 size={13} />}
-                      onClick={() => setSkillToRemove({ key: skill, type: 'global' })}
-                    />
+                    {isAdmin && (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        icon={<Trash2 size={13} />}
+                        onClick={() => setSkillToRemove({ key: skill, type: 'global' })}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -735,12 +752,14 @@ export function BotDetailPage() {
                         <div className="text-xs text-claw-muted">专属 · Bot 级</div>
                       </div>
                     </div>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      icon={<Trash2 size={13} />}
-                      onClick={() => setSkillToRemove({ key: skill, type: 'agent' })}
-                    />
+                    {isAdmin && (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        icon={<Trash2 size={13} />}
+                        onClick={() => setSkillToRemove({ key: skill, type: 'agent' })}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -783,25 +802,28 @@ export function BotDetailPage() {
                         </div>
                       </div>
                     </div>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      icon={<Trash2 size={13} />}
-                      loading={removeSkill.isPending}
-                      onClick={() =>
-                        removeSkill.mutate({
-                          agentId: agentId!,
-                          skillCatalogId: install.skillCatalogId,
-                        })
-                      }
-                    />
+                    {isAdmin && (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        icon={<Trash2 size={13} />}
+                        loading={removeSkill.isPending}
+                        onClick={() =>
+                          removeSkill.mutate({
+                            agentId: agentId!,
+                            skillCatalogId: install.skillCatalogId,
+                          })
+                        }
+                      />
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Available Skills */}
+          {/* Available Skills — assigning is an admin-only action */}
+          {isAdmin && (
           <div>
             <h4 className="text-sm font-semibold text-claw-text mb-3">可分配 Skills</h4>
             {availableSkills.length === 0 ? (
@@ -847,6 +869,7 @@ export function BotDetailPage() {
               </div>
             )}
           </div>
+          )}
         </div>
       )}
 
