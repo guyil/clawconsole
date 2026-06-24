@@ -143,11 +143,11 @@ export function RegisterMachineModal({ open, onClose }: Props) {
           />
         </div>
         <div>
-          <label className="block text-xs text-claw-muted mb-1">Gateway AES Key（Chat 功能必填）</label>
+          <label className="block text-xs text-claw-muted mb-1">Gateway AES Key（仅 erp bot 数据权限需要）</label>
           <input
             className={inputClass}
             type="password"
-            placeholder="X_AUTH_TOKEN_AES_KEY，用于 Chat 时签发 X-AUTH-TOKEN"
+            placeholder="X_AUTH_TOKEN_AES_KEY；标准 openclaw 留空即可"
             value={form.gatewayAesKey}
             onChange={(e) => setForm({ ...form, gatewayAesKey: e.target.value })}
           />

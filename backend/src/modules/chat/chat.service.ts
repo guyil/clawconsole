@@ -46,11 +46,17 @@ export class ChatService {
     private deps: ChatServiceDeps,
   ) {}
 
-  /** Machines that can be chatted with: directConnect + gateway token + AES key. */
+  /**
+   * Machines that can be chatted with: any machine with a `gatewayToken` (the
+   * HTTP bearer for its gateway). Works for both directConnect (public-IP)
+   * nodes and Tailscale-monitored machines (reached over the tailnet hostname).
+   * `gatewayAesKey` is optional — only erp gateways need it (to mint the
+   * X-AUTH-TOKEN); standard openclaw gateways are chatted without it.
+   */
   async listNodes(scope?: { machineIds: string[] }): Promise<ChatNode[]> {
     const machines = await this.deps.machineRepo.findAll();
     return machines
-      .filter((m) => m.directConnect && m.gatewayToken && m.gatewayAesKey)
+      .filter((m) => Boolean(m.gatewayToken))
       .filter((m) => !scope || scope.machineIds.includes(m.id))
       .map((m) => ({
         id: m.id,
@@ -100,9 +106,9 @@ export class ChatService {
   }
 
   private assertChatCapable(machine: Machine): void {
-    if (!machine.directConnect || !machine.gatewayToken || !machine.gatewayAesKey) {
+    if (!machine.gatewayToken) {
       throw new ValidationError(
-        `Machine ${machine.name} is not chat-capable (needs directConnect + gatewayToken + gatewayAesKey)`,
+        `Machine ${machine.name} is not chat-capable (needs a gatewayToken)`,
       );
     }
   }
@@ -144,23 +150,25 @@ export class ChatService {
     const port = machine.gatewayPort ?? config.gateway.defaultPort;
     const url = `http://${machine.tailscaleHostname}:${port}/v1/chat/completions`;
 
-    // Per-bot data identity: present this bot's 数据中台 sender identity so the
-    // platform scopes data to it. Falls back to the global operator identity
-    // when the bot has none configured.
-    const agent = await this.deps.agentRepo.findByMachineAndAgentId(conv.machineId, conv.agentId);
-    const dataUserId = agent?.dataUserId?.trim() || config.chat.operatorUserId;
-    const dataUserName = agent?.dataUserName?.trim() || config.chat.operatorUserName;
-    const xAuth = mintErpAuthToken(machine.gatewayAesKey!, dataUserId, dataUserName);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${machine.gatewayToken}`,
+      'Content-Type': 'application/json',
+    };
+    // erp gateways only: mint + present the X-AUTH-TOKEN so the 数据中台 scopes
+    // data. Per-bot data identity (if configured) overrides the global operator.
+    // Standard openclaw gateways have no AES key and need no X-AUTH.
+    if (machine.gatewayAesKey) {
+      const agent = await this.deps.agentRepo.findByMachineAndAgentId(conv.machineId, conv.agentId);
+      const dataUserId = agent?.dataUserId?.trim() || config.chat.operatorUserId;
+      const dataUserName = agent?.dataUserName?.trim() || config.chat.operatorUserName;
+      headers['X-AUTH-TOKEN'] = mintErpAuthToken(machine.gatewayAesKey, dataUserId, dataUserName);
+    }
 
     let response: Response;
     try {
       response = await fetch(url, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${machine.gatewayToken}`,
-          'X-AUTH-TOKEN': xAuth,
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           model: `openclaw/${conv.agentId}`,
           messages,

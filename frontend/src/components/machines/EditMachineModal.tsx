@@ -173,11 +173,11 @@ export function EditMachineModal({ open, onClose, machine }: Props) {
           />
         </div>
         <div>
-          <label className="block text-xs text-claw-muted mb-1">Gateway AES Key（留空则不修改）</label>
+          <label className="block text-xs text-claw-muted mb-1">Gateway AES Key（仅 erp 数据权限；留空则不修改）</label>
           <input
             className={inputClass}
             type="password"
-            placeholder="Chat 功能用于签发 X-AUTH-TOKEN"
+            placeholder="X_AUTH_TOKEN_AES_KEY；标准 openclaw 无需"
             value={form.gatewayAesKey}
             onChange={(e) => setForm({ ...form, gatewayAesKey: e.target.value })}
           />
