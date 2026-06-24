@@ -143,11 +143,14 @@ export class ChatService {
 
     const port = machine.gatewayPort ?? config.gateway.defaultPort;
     const url = `http://${machine.tailscaleHostname}:${port}/v1/chat/completions`;
-    const xAuth = mintErpAuthToken(
-      machine.gatewayAesKey!,
-      config.chat.operatorUserId,
-      config.chat.operatorUserName,
-    );
+
+    // Per-bot data identity: present this bot's 数据中台 sender identity so the
+    // platform scopes data to it. Falls back to the global operator identity
+    // when the bot has none configured.
+    const agent = await this.deps.agentRepo.findByMachineAndAgentId(conv.machineId, conv.agentId);
+    const dataUserId = agent?.dataUserId?.trim() || config.chat.operatorUserId;
+    const dataUserName = agent?.dataUserName?.trim() || config.chat.operatorUserName;
+    const xAuth = mintErpAuthToken(machine.gatewayAesKey!, dataUserId, dataUserName);
 
     let response: Response;
     try {

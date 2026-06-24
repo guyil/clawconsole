@@ -532,6 +532,8 @@ async function main() {
       status?: string;
       modelConfig?: unknown;
       ossSyncEnabled?: unknown;
+      dataUserId?: string | null;
+      dataUserName?: string | null;
     };
 
     const existing = await agentRepo.findById(agentId);
@@ -571,6 +573,10 @@ async function main() {
       }
       updates.ossSyncEnabled = body.ossSyncEnabled;
     }
+    // Per-bot 数据中台 sender identity (data permission). Trimmed; empty → null
+    // so the bot falls back to the global CHAT_OPERATOR identity.
+    if ('dataUserId' in body) updates.dataUserId = normalizeStr(body.dataUserId);
+    if ('dataUserName' in body) updates.dataUserName = normalizeStr(body.dataUserName);
     // modelConfig has its own dedicated PUT route (with validation +
     // remote sync side-effects); we don't accept it through this generic
     // patch to keep the side-effects out of an unexpected codepath.

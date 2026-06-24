@@ -34,6 +34,14 @@ export interface Agent extends AgentOssSyncState {
   description: string | null;
   isDefault: boolean;
   workspacePath: string | null;
+  /**
+   * 数据中台 sender identity used to scope this bot's data permission. When set,
+   * the console Chat proxy mints the X-AUTH-TOKEN with this identity instead of
+   * the global CHAT_OPERATOR; the 数据中台 enforces that identity's data scope.
+   * Null → fall back to the global operator identity.
+   */
+  dataUserId: string | null;
+  dataUserName: string | null;
   discoveredSkills: string[] | null;
   modelConfig: AgentModelConfig | null;
   status: AgentStatus;
@@ -66,6 +74,9 @@ export interface UpdateAgentInput {
   description?: string | null;
   status?: AgentStatus;
   modelConfig?: AgentModelConfig | null;
+  /** Per-bot 数据中台 sender identity. `null` clears it (falls back to global operator). */
+  dataUserId?: string | null;
+  dataUserName?: string | null;
   /**
    * Toggle for the nightly OSS distill backup. ``undefined`` leaves the
    * stored value alone; ``true`` / ``false`` overwrite it.

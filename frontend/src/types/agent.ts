@@ -17,6 +17,9 @@ export interface Agent {
   description: string | null;
   isDefault: boolean;
   workspacePath: string | null;
+  /** Per-bot 数据中台 sender identity for data permission. Null → global operator. */
+  dataUserId: string | null;
+  dataUserName: string | null;
   discoveredSkills: string[] | null;
   modelConfig: AgentModelConfig | null;
   status: AgentStatus;
@@ -62,6 +65,9 @@ export interface UpdateAgentInput {
    * ``undefined`` leaves the stored value alone.
    */
   ossSyncEnabled?: boolean;
+  /** Per-bot 数据中台 sender identity. `null` clears it (falls back to global operator). */
+  dataUserId?: string | null;
+  dataUserName?: string | null;
 }
 
 export interface AgentWithMachine extends Agent {

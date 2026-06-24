@@ -103,6 +103,8 @@ export class AgentRepository {
     if (input.ossSyncEnabled !== undefined) {
       updates.oss_sync_enabled = input.ossSyncEnabled;
     }
+    if (input.dataUserId !== undefined) updates.data_user_id = input.dataUserId;
+    if (input.dataUserName !== undefined) updates.data_user_name = input.dataUserName;
 
     await this.db('agents').where('id', id).update(updates);
     return this.findById(id);
@@ -226,6 +228,8 @@ export class AgentRepository {
       description: row.description as string | null,
       isDefault: Boolean(row.is_default),
       workspacePath: row.workspace_path as string | null,
+      dataUserId: (row.data_user_id as string | null) ?? null,
+      dataUserName: (row.data_user_name as string | null) ?? null,
       discoveredSkills,
       modelConfig,
       status: row.status as AgentStatus,

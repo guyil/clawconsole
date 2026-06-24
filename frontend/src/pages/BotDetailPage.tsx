@@ -492,6 +492,13 @@ export function BotDetailPage() {
               {agent.ossSyncEnabled ? '已启用' : '已禁用'}
             </span>
           </div>
+          {isAdmin && (
+            <DataIdentityEditor
+              agentId={agentId!}
+              dataUserId={agent.dataUserId}
+              dataUserName={agent.dataUserName}
+            />
+          )}
           {autoSyncing && (
             <div className="flex items-center gap-1.5 text-claw-muted">
               <Spinner size={12} />
@@ -916,6 +923,75 @@ export function BotDetailPage() {
           );
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * Per-bot data-permission identity. The console Chat proxy mints the ERP
+ * X-AUTH-TOKEN with this 数据中台 sender identity, so different bots can resolve
+ * to different data scopes. Empty → the bot falls back to the global operator.
+ */
+function DataIdentityEditor({
+  agentId,
+  dataUserId,
+  dataUserName,
+}: {
+  agentId: string;
+  dataUserId: string | null;
+  dataUserName: string | null;
+}) {
+  const updateAgent = useUpdateAgent();
+  const [uid, setUid] = useState(dataUserId ?? '');
+  const [uname, setUname] = useState(dataUserName ?? '');
+  useEffect(() => {
+    setUid(dataUserId ?? '');
+    setUname(dataUserName ?? '');
+  }, [dataUserId, dataUserName]);
+
+  const dirty = uid !== (dataUserId ?? '') || uname !== (dataUserName ?? '');
+  const configured = Boolean(dataUserId || dataUserName);
+
+  return (
+    <div className="flex flex-col gap-2 pt-2 mt-1 border-t border-claw-border">
+      <div className="flex items-center gap-2">
+        <span className="text-claw-muted text-sm">数据权限身份（数据中台 sender）:</span>
+        {configured ? (
+          <span className="text-xs text-claw-success">已配置</span>
+        ) : (
+          <span className="text-xs text-claw-muted">未配置 · 用全局运营身份</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          className="bg-claw-input border border-claw-border rounded-lg px-2.5 py-1.5 text-sm text-claw-text placeholder-claw-muted focus:outline-none focus:border-claw-primary w-40"
+          placeholder="user_id"
+          value={uid}
+          onChange={(e) => setUid(e.target.value)}
+        />
+        <input
+          className="bg-claw-input border border-claw-border rounded-lg px-2.5 py-1.5 text-sm text-claw-text placeholder-claw-muted focus:outline-none focus:border-claw-primary w-44"
+          placeholder="user_name"
+          value={uname}
+          onChange={(e) => setUname(e.target.value)}
+        />
+        <Button
+          size="sm"
+          loading={updateAgent.isPending}
+          disabled={!dirty || updateAgent.isPending}
+          onClick={() =>
+            updateAgent.mutate({
+              agentId,
+              data: { dataUserId: uid.trim() || null, dataUserName: uname.trim() || null },
+            })
+          }
+        >
+          保存
+        </Button>
+      </div>
+      <p className="text-[11px] text-claw-muted">
+        设置后，在「对话」里跟这个 Bot 聊天会以该身份向数据中台取数；留空则用全局运营身份。
+      </p>
     </div>
   );
 }
