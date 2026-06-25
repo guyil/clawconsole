@@ -54,10 +54,19 @@ describe('authorizeDeveloper (default-deny)', () => {
   it('denies bot mutations and summary generation', () => {
     expect(authorizeDeveloper('POST', '/api/agents/agent-1/provision', scope).ok).toBe(false);
     expect(authorizeDeveloper('DELETE', '/api/agents/agent-1', scope).ok).toBe(false);
-    expect(authorizeDeveloper('PATCH', '/api/agents/agent-1', scope).ok).toBe(false);
     expect(authorizeDeveloper('POST', '/api/summaries/generate', scope).ok).toBe(false);
     // A monitoring POST that isn't an allowlisted sync endpoint stays denied.
     expect(authorizeDeveloper('POST', '/api/monitoring/sessions', scope).ok).toBe(false);
+  });
+
+  it('allows PATCH on an assigned bot (data identity), denies others / subpaths', () => {
+    // The route handler enforces the field-level restriction (dataUserId/
+    // dataUserName only); authz just gates the bot is in scope.
+    expect(authorizeDeveloper('PATCH', '/api/agents/agent-1', scope).ok).toBe(true);
+    expect(authorizeDeveloper('PATCH', '/api/agents/agent-2', scope).ok).toBe(true);
+    expect(authorizeDeveloper('PATCH', '/api/agents/agent-999', scope).ok).toBe(false);
+    // Only the bare bot resource — never a PATCH on a subresource.
+    expect(authorizeDeveloper('PATCH', '/api/agents/agent-1/model-config', scope).ok).toBe(false);
   });
 
   it('allows read-only browse of the global Skills catalog', () => {

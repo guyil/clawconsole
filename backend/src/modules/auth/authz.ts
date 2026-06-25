@@ -136,6 +136,18 @@ export function authorizeDeveloper(
     return { ok: false };
   }
 
+  // ── Editing an assigned bot's data-permission identity (PATCH) ──────
+  // /api/agents/:agentId — developers may update ONLY the data-permission
+  // identity fields (dataUserId/dataUserName) on assigned bots. The bot must
+  // be in scope here; the route handler enforces the field-level restriction
+  // so status/name/model/oss stay admin-only.
+  if (method === 'PATCH') {
+    if (segments[0] === 'api' && segments[1] === 'agents' && segments[2] && !segments[3]) {
+      return { ok: isAgentInScope(scope, segments[2]) };
+    }
+    return { ok: false };
+  }
+
   // ── Scoped POSTs ───────────────────────────────────────────────────
   if (method === 'POST') {
     // On-demand monitoring data collection (handlers re-check scope).

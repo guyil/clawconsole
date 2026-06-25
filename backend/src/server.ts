@@ -539,6 +539,22 @@ async function main() {
     const existing = await agentRepo.findById(agentId);
     if (!existing) throw new AppError('Agent not found', 'NOT_FOUND', 404);
 
+    // Developers (authScope is set only for them) reach this route via the
+    // authz allowlist, but ONLY to manage the data-permission identity on
+    // their assigned bots. Reject any other field so they can't flip
+    // status/name/model/oss — those stay admin-only.
+    if (request.authScope) {
+      const DEV_ALLOWED = new Set(['dataUserId', 'dataUserName']);
+      const forbidden = Object.keys(body).filter((k) => !DEV_ALLOWED.has(k));
+      if (forbidden.length > 0) {
+        throw new AppError(
+          `Developers may only edit data identity fields (forbidden: ${forbidden.join(', ')})`,
+          'FORBIDDEN',
+          403,
+        );
+      }
+    }
+
     const normalizeStr = (v: string | null | undefined): string | null | undefined => {
       if (v === undefined) return undefined;
       if (v === null) return null;

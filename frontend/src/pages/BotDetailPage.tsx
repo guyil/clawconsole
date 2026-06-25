@@ -492,13 +492,13 @@ export function BotDetailPage() {
               {agent.ossSyncEnabled ? '已启用' : '已禁用'}
             </span>
           </div>
-          {isAdmin && (
-            <DataIdentityEditor
-              agentId={agentId!}
-              dataUserId={agent.dataUserId}
-              dataUserName={agent.dataUserName}
-            />
-          )}
+          {/* Data-permission identity is editable by developers too, scoped to
+              their assigned bots (backend authz + field-level restriction). */}
+          <DataIdentityEditor
+            agentId={agentId!}
+            dataUserId={agent.dataUserId}
+            dataUserName={agent.dataUserName}
+          />
           {autoSyncing && (
             <div className="flex items-center gap-1.5 text-claw-muted">
               <Spinner size={12} />
