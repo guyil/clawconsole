@@ -2,7 +2,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import type { MachineRepository } from '../machines/machine.repository.js';
 import type { AgentRepository } from '../agents/agent.repository.js';
 import type { Machine } from '../machines/machine.types.js';
-import { NotFoundError, ValidationError } from '../../shared/errors.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../shared/errors.js';
 import { createChildLogger } from '../../shared/logger.js';
 import { config } from '../../config/index.js';
 import type { ChatRepository } from './chat.repository.js';
@@ -68,9 +68,34 @@ export class ChatService {
       }));
   }
 
-  async listBots(machineId: string): Promise<ChatBot[]> {
+  /**
+   * Bots on a node. Developers pass their assigned slugs for this machine so
+   * the dropdown only offers bots they're allowed to chat with; admins (no
+   * scope) see every bot on the node.
+   */
+  async listBots(machineId: string, scope?: { agentSlugs: string[] }): Promise<ChatBot[]> {
     const agents = await this.deps.agentRepo.findByMachineId(machineId);
-    return agents.map((a) => ({ agentId: a.agentId, name: a.name }));
+    return agents
+      .filter((a) => !scope || scope.agentSlugs.includes(a.agentId))
+      .map((a) => ({ agentId: a.agentId, name: a.name }));
+  }
+
+  /**
+   * Guard the conversation-id routes (read messages, send a turn, delete) for
+   * developers: the conversation's target bot must be in their assigned scope.
+   * Stops a developer from reaching an unassigned bot via a guessed/leaked
+   * conversation id. Admins are unrestricted and skip this.
+   */
+  async assertConversationInScope(
+    conversationId: string,
+    scope: { agentKeys: Array<[string, string]> },
+  ): Promise<void> {
+    const conv = await this.repo.findById(conversationId);
+    if (!conv) throw new NotFoundError('Conversation', conversationId);
+    const inScope = scope.agentKeys.some(
+      ([m, s]) => m === conv.machineId && s === conv.agentId,
+    );
+    if (!inScope) throw new ForbiddenError('Not authorized for this conversation');
   }
 
   async createConversation(input: {
