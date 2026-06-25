@@ -28,7 +28,16 @@ export function registerChatRoutes(fastify: FastifyInstance, service: ChatServic
     if (request.authScope && !request.authScope.machineIds.includes(machineId)) {
       throw new ForbiddenError('Not authorized for this node');
     }
-    const bots = await service.listBots(machineId);
+    const bots = await service.listBots(
+      machineId,
+      request.authScope
+        ? {
+            agentSlugs: request.authScope.agentKeys
+              .filter(([m]) => m === machineId)
+              .map(([, slug]) => slug),
+          }
+        : undefined,
+    );
     return { data: bots };
   });
 
@@ -39,8 +48,11 @@ export function registerChatRoutes(fastify: FastifyInstance, service: ChatServic
 
   fastify.post('/api/chat/conversations', async (request, reply) => {
     const body = CreateConversationSchema.parse(request.body);
-    if (request.authScope && !request.authScope.machineIds.includes(body.machineId)) {
-      throw new ForbiddenError('Not authorized for this node');
+    if (
+      request.authScope &&
+      !request.authScope.agentKeys.some(([m, s]) => m === body.machineId && s === body.agentId)
+    ) {
+      throw new ForbiddenError('Not authorized for this bot');
     }
     const conversation = await service.createConversation({
       machineId: body.machineId,
@@ -53,12 +65,14 @@ export function registerChatRoutes(fastify: FastifyInstance, service: ChatServic
 
   fastify.get('/api/chat/conversations/:id/messages', async (request) => {
     const { id } = request.params as { id: string };
+    if (request.authScope) await service.assertConversationInScope(id, request.authScope);
     const messages = await service.getMessages(id);
     return { data: messages };
   });
 
   fastify.delete('/api/chat/conversations/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (request.authScope) await service.assertConversationInScope(id, request.authScope);
     await service.deleteConversation(id);
     return reply.status(204).send();
   });
@@ -67,6 +81,7 @@ export function registerChatRoutes(fastify: FastifyInstance, service: ChatServic
   fastify.post('/api/chat/conversations/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = SendMessageSchema.parse(request.body);
+    if (request.authScope) await service.assertConversationInScope(id, request.authScope);
 
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',

@@ -117,6 +117,11 @@ export function authorizeDeveloper(
     // (list, detail, tags) but every skill mutation stays denied below.
     if (pathOnly === '/api/skills' || pathOnly.startsWith('/api/skills/')) return { ok: true };
 
+    // Chat surface (read). The chat handlers scope nodes/bots to the
+    // developer's assigned machines+bots, conversations to the requesting
+    // user, and conversation-id routes re-check the target bot is in scope.
+    if (pathOnly.startsWith('/api/chat/')) return { ok: true };
+
     return { ok: false };
   }
 
@@ -149,6 +154,28 @@ export function authorizeDeveloper(
       return { ok: isMachineInScope(scope, segments[2]) };
     }
 
+    // Chat: create a conversation / send a turn. The create handler re-checks
+    // the target bot is assigned to this developer; the send handler re-checks
+    // the conversation's bot is in scope.
+    if (segments[0] === 'api' && segments[1] === 'chat' && segments[2] === 'conversations') {
+      return { ok: true };
+    }
+
+    return { ok: false };
+  }
+
+  // ── Deleting an owned chat conversation (DELETE) ───────────────────
+  if (method === 'DELETE') {
+    // /api/chat/conversations/:id — handler re-checks the conversation's bot
+    // is in the developer's scope before deleting.
+    if (
+      segments[0] === 'api' &&
+      segments[1] === 'chat' &&
+      segments[2] === 'conversations' &&
+      segments[3]
+    ) {
+      return { ok: true };
+    }
     return { ok: false };
   }
 

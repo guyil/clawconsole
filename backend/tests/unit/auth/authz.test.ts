@@ -74,6 +74,22 @@ describe('authorizeDeveloper (default-deny)', () => {
     expect(authorizeDeveloper('POST', '/api/skills/some-skill-id/deploy/m1', scope).ok).toBe(false);
   });
 
+  it('allows the chat read surface (handlers scope nodes/bots/conversations)', () => {
+    expect(authorizeDeveloper('GET', '/api/chat/nodes', scope).ok).toBe(true);
+    expect(authorizeDeveloper('GET', '/api/chat/nodes/m1/bots', scope).ok).toBe(true);
+    expect(authorizeDeveloper('GET', '/api/chat/conversations', scope).ok).toBe(true);
+    expect(authorizeDeveloper('GET', '/api/chat/conversations/c1/messages', scope).ok).toBe(true);
+  });
+
+  it('allows creating a conversation and sending a turn (handlers re-check bot scope)', () => {
+    expect(authorizeDeveloper('POST', '/api/chat/conversations', scope).ok).toBe(true);
+    expect(authorizeDeveloper('POST', '/api/chat/conversations/c1/messages', scope).ok).toBe(true);
+  });
+
+  it('allows deleting a chat conversation (handler re-checks bot scope)', () => {
+    expect(authorizeDeveloper('DELETE', '/api/chat/conversations/c1', scope).ok).toBe(true);
+  });
+
   it('denies admin-only surfaces (node mutations, credentials, users)', () => {
     expect(authorizeDeveloper('POST', '/api/machines', scope).ok).toBe(false);
     expect(authorizeDeveloper('GET', '/api/credentials', scope).ok).toBe(false);
