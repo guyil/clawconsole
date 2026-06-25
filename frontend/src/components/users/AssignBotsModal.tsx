@@ -43,6 +43,18 @@ export function AssignBotsModal({ open, onClose, user }: Props) {
     });
   };
 
+  const toggleGroup = (bots: typeof agents) => {
+    const allSelected = bots.every((b) => selected.has(b.id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const b of bots) {
+        if (allSelected) next.delete(b.id);
+        else next.add(b.id);
+      }
+      return next;
+    });
+  };
+
   const handleSave = () => {
     if (!user) return;
     setAssignments.mutate(
@@ -70,10 +82,24 @@ export function AssignBotsModal({ open, onClose, user }: Props) {
           <div className="py-8 text-center text-sm text-claw-muted">暂无可分配的 Bot</div>
         ) : (
           <div className="max-h-[50vh] overflow-y-auto space-y-4 pr-1">
-            {grouped.map((group) => (
+            {grouped.map((group) => {
+              const allSelected = group.bots.every((b) => selected.has(b.id));
+              return (
               <div key={group.machineName}>
-                <div className="text-[11px] uppercase tracking-wide text-claw-muted mb-1.5">
-                  {group.machineName}
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] uppercase tracking-wide text-claw-muted">
+                    {group.machineName}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.bots)}
+                    className="text-[11px] text-claw-primary hover:underline"
+                  >
+                    {allSelected ? '取消全选' : '全选'}
+                    <span className="text-claw-muted ml-1">
+                      ({group.bots.filter((b) => selected.has(b.id)).length}/{group.bots.length})
+                    </span>
+                  </button>
                 </div>
                 <div className="space-y-1">
                   {group.bots.map((bot) => {
@@ -105,7 +131,8 @@ export function AssignBotsModal({ open, onClose, user }: Props) {
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
