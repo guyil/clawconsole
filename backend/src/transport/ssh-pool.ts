@@ -1,4 +1,4 @@
-import { Client, type ConnectConfig } from 'ssh2';
+import { Client, type ClientChannel, type ConnectConfig } from 'ssh2';
 import { config } from '../config/index.js';
 import { createChildLogger } from '../shared/logger.js';
 import { MachineUnreachableError, SSHError } from '../shared/errors.js';
@@ -165,7 +165,24 @@ export class SSHPool {
         // need bigger output should pass an explicit higher number, OR
         // (better) stream the data via SFTP instead of stdout.
         const maxStdoutBytes = options.maxStdoutBytes ?? 64 * 1024 * 1024;
+
+        // Shared across the timeout timer and the exec callback below so
+        // either side can abort the other. Without ``activeStream`` the
+        // timeout handler had no channel to close, which used to leak the
+        // remote process (e.g. a ``find … | sha256sum`` manifest scan)
+        // forever every time it ran past ``timeoutMs`` — see the
+        // maxStdoutBytes branch below, which already closed its stream.
+        let aborted = false;
+        let activeStream: ClientChannel | null = null;
+
         const timer = setTimeout(() => {
+          aborted = true;
+          if (activeStream) {
+            try {
+              activeStream.close();
+              activeStream.destroy();
+            } catch { /* ignore */ }
+          }
           reject(new SSHError(info.machineId, command, `Command timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
@@ -175,6 +192,16 @@ export class SSHPool {
             reject(new SSHError(info.machineId, command, err.message));
             return;
           }
+          if (aborted) {
+            // Timer already fired while exec() was still in flight; don't
+            // let this channel run unattended.
+            try {
+              stream.close();
+              stream.destroy();
+            } catch { /* ignore */ }
+            return;
+          }
+          activeStream = stream;
 
           // Buffer chunks then concat at close — avoids the O(n^2) cost of
           // ``stdout += data.toString()`` on multi-MB output and lets us
@@ -182,7 +209,6 @@ export class SSHPool {
           const stdoutChunks: Buffer[] = [];
           const stderrChunks: Buffer[] = [];
           let stdoutBytes = 0;
-          let aborted = false;
 
           stream.on('data', (data: Buffer) => {
             if (aborted) return;
